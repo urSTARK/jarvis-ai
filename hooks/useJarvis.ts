@@ -140,15 +140,17 @@ export const useJarvis = () => {
     const aiRef = useRef<GoogleGenAI | null>(null);
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
+    const inputAudioContextRef = useRef<AudioContext | null>(null);
+    const mediaStreamRef = useRef<MediaStream | null>(null);
+    const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
     const animationFrameRef = useRef<number>();
 
     useEffect(() => {
-        // Fix: The API key must be obtained exclusively from `process.env.API_KEY`.
         const apiKey = process.env.API_KEY;
         if (!apiKey) {
-            // Fix: Update error message to refer to the correct environment variable.
             setError('J.A.R.V.I.S. is offline. The API_KEY environment variable is not configured.');
             return;
         }
@@ -181,7 +183,7 @@ export const useJarvis = () => {
             });
             const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
             if (base64Audio) {
-                if (!outputAudioContextRef.current) {
+                if (!outputAudioContextRef.current || outputAudioContextRef.current.state === 'closed') {
                     outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
                 }
                 const ctx = outputAudioContextRef.current;
@@ -196,23 +198,23 @@ export const useJarvis = () => {
         } catch (error) { console.error("TTS Error:", error); }
     }, []);
 
-    const addNewTask = (description: string): Task => {
+    const addNewTask = useCallback((description: string): Task => {
         const newTask: Task = {
             id: crypto.randomUUID(), description, status: TaskStatus.InProgress, startTime: new Date().toISOString(),
         };
         setTasks(prev => [newTask, ...prev.slice(0, 9)]);
         return newTask;
-    };
+    }, []);
     
-    const updateTask = (id: string, status: TaskStatus, result?: string) => {
+    const updateTask = useCallback((id: string, status: TaskStatus, result?: string) => {
         setTasks(prev => prev.map(t => t.id === id ? { ...t, status, result } : t));
-    };
+    }, []);
     
-    const addMessage = (message: Omit<Message, 'id' | 'timestamp'>) => {
+    const addMessage = useCallback((message: Omit<Message, 'id' | 'timestamp'>) => {
         setMessages(prev => [...prev.filter(m => !m.isPartial), { ...message, id: crypto.randomUUID(), timestamp: new Date().toISOString() }]);
-    };
+    }, []);
 
-    const updateLastMessage = (text: string, sender: Sender, isPartial: boolean) => {
+    const updateLastMessage = useCallback((text: string, sender: Sender, isPartial: boolean) => {
         setMessages(prev => {
             const lastMsg = prev[prev.length -1];
             if (lastMsg?.isPartial && lastMsg.sender === sender) {
@@ -221,7 +223,7 @@ export const useJarvis = () => {
             const newPartialMessage: Message = { id: crypto.randomUUID(), text, sender, timestamp: new Date().toISOString(), isPartial: true };
             return [...prev, newPartialMessage];
         });
-    };
+    }, []);
     
     const executeToolCall = useCallback(async (fc: FunctionCall) => {
         const task = addNewTask(`Executing: ${fc.name}`);
@@ -239,7 +241,7 @@ export const useJarvis = () => {
                         config: { tools: [{googleSearch: {}}] },
                     });
                     const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks;
-                    const sources = groundingChunks?.map((chunk: any) => chunk.web) ?? [];
+                    const sources = groundingChunks?.map((chunk: any) => chunk.web).filter(Boolean) ?? [];
                     const searchResultText = searchResponse.text;
                     addMessage({ text: searchResultText, sender: Sender.AI, sources });
                     await speak(searchResultText);
@@ -278,45 +280,76 @@ export const useJarvis = () => {
         } finally {
             setIsProcessing(false);
         }
-    }, [speak]);
+    }, [speak, addNewTask, addMessage, updateTask]);
     
     const disconnect = useCallback(() => {
-        sessionPromiseRef.current?.then(session => session.close());
-        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+        const currentSessionPromise = sessionPromiseRef.current;
+        currentSessionPromise?.then(session => session.close());
+        
+        sessionPromiseRef.current = null;
+        
+        if (animationFrameRef.current) {
+            cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = undefined;
+        }
+
+        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+        
+        scriptProcessorRef.current?.disconnect();
+        scriptProcessorRef.current = null;
+        
+        analyserRef.current?.disconnect();
+        analyserRef.current = null;
+
+        if (inputAudioContextRef.current?.state !== 'closed') {
+            inputAudioContextRef.current?.close();
+        }
+        inputAudioContextRef.current = null;
+
+        for (const source of audioSourcesRef.current.values()) source.stop();
+        audioSourcesRef.current.clear();
+        nextStartTimeRef.current = 0;
+
         setIsSessionActive(false);
         setIsThinking(false);
         setMicVolume(0);
     }, []);
 
     const connect = useCallback(async () => {
-        if (!aiRef.current || isSessionActive || sessionPromiseRef.current) return;
+        if (!aiRef.current || sessionPromiseRef.current) return;
+        
         setIsSessionActive(true);
 
-        const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-        outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+        if (!outputAudioContextRef.current || outputAudioContextRef.current.state === 'closed') {
+            outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        }
+        const inputAudioContext = inputAudioContextRef.current;
         const outputCtx = outputAudioContextRef.current;
         nextStartTimeRef.current = 0;
 
-        let stream: MediaStream | null = null;
-        let scriptProcessor: ScriptProcessorNode | null = null;
-        let analyser: AnalyserNode | null = null;
-
+        let localStream: MediaStream | null = null;
+      
         sessionPromiseRef.current = aiRef.current.live.connect({
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             callbacks: {
                 onopen: async () => {
                     try {
-                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                        const source = inputAudioContext.createMediaStreamSource(stream);
-                        scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
-                        analyser = inputAudioContext.createAnalyser();
+                        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        mediaStreamRef.current = localStream;
+                        const source = inputAudioContext.createMediaStreamSource(localStream);
+                        scriptProcessorRef.current = inputAudioContext.createScriptProcessor(4096, 1, 1);
+                        analyserRef.current = inputAudioContext.createAnalyser();
+                        
+                        const analyser = analyserRef.current;
                         analyser.fftSize = 512;
                         const bufferLength = analyser.frequencyBinCount;
                         const dataArray = new Uint8Array(bufferLength);
                         
                         source.connect(analyser);
-                        analyser.connect(scriptProcessor);
-                        scriptProcessor.connect(inputAudioContext.destination);
+                        analyser.connect(scriptProcessorRef.current);
+                        scriptProcessorRef.current.connect(inputAudioContext.destination);
 
                         const draw = () => {
                             animationFrameRef.current = requestAnimationFrame(draw);
@@ -327,11 +360,11 @@ export const useJarvis = () => {
                                 sum += v * v;
                             }
                             const rms = Math.sqrt(sum / bufferLength);
-                            setMicVolume(rms * 2.5); // Amplify for better visual
+                            setMicVolume(rms * 2.5);
                         };
                         draw();
 
-                        scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                        scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             const pcmBlob = createBlob(inputData);
                             sessionPromiseRef.current?.then((session) => {
@@ -362,16 +395,14 @@ export const useJarvis = () => {
 
                     if (message.toolCall) {
                         setIsThinking(false);
-                        const toolResponses = [];
                         for (const fc of message.toolCall.functionCalls) {
                             const response = await executeToolCall(fc);
-                            toolResponses.push(response);
+                            sessionPromiseRef.current?.then(s => s.sendToolResponse({ functionResponses: response }));
                         }
-                        sessionPromiseRef.current?.then(s => s.sendToolResponse({ functionResponses: toolResponses }));
                     }
 
                     const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData.data;
-                    if (base64Audio) {
+                    if (base64Audio && outputCtx) {
                         setIsThinking(false);
                         nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
                         const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
@@ -396,15 +427,7 @@ export const useJarvis = () => {
                     disconnect();
                 },
                 onclose: () => {
-                    stream?.getTracks().forEach(track => track.stop());
-                    scriptProcessor?.disconnect();
-                    analyser?.disconnect();
-                    if(inputAudioContext.state !== 'closed') inputAudioContext.close();
-                    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-                    sessionPromiseRef.current = null;
-                    setIsSessionActive(false);
-                    setIsThinking(false);
-                    setMicVolume(0);
+                    disconnect();
                 },
             },
             config: {
@@ -416,17 +439,16 @@ export const useJarvis = () => {
                 tools: [{ functionDeclarations }],
             },
         });
-    }, [isSessionActive, executeToolCall, disconnect]);
+    }, [executeToolCall, disconnect, updateLastMessage]);
     
-    // Auto-start the session on component mount
     useEffect(() => {
-        if(aiRef.current) {
+        if(aiRef.current && !error) {
             connect();
         }
         return () => {
             disconnect();
         }
-    }, [aiRef.current, connect, disconnect]);
+    }, [connect, disconnect, error]);
 
     const clearSession = () => {
         setMessages([greetingMessage]);
@@ -439,5 +461,11 @@ export const useJarvis = () => {
         addMessage({ sender: Sender.System, text: "Session cleared." });
     };
 
-    return { messages, tasks, isSessionActive, isThinking, isProcessing, micVolume, error, clearSession };
+    const restartSession = useCallback(() => {
+        addMessage({ sender: Sender.System, text: "Restarting session..." });
+        disconnect();
+        setTimeout(() => connect(), 100);
+    }, [disconnect, connect, addMessage]);
+
+    return { messages, tasks, isSessionActive, isThinking, isProcessing, micVolume, error, clearSession, restartSession };
 };

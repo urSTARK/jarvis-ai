@@ -14,6 +14,7 @@ const App: React.FC = () => {
     micVolume,
     error,
     clearSession,
+    restartSession,
   } = useJarvis();
 
   if (error) {
@@ -32,7 +33,14 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen bg-slate-900/80 flex flex-col font-sans overflow-hidden">
-      <div className="absolute top-4 right-4 z-10">
+      <div className="absolute top-4 right-4 z-10 flex space-x-2">
+        <button 
+          onClick={restartSession}
+          className="bg-slate-700/50 hover:bg-cyan-500/50 text-white font-semibold py-2 px-4 border border-slate-600 hover:border-cyan-500 rounded-lg shadow-lg transition-all duration-300 backdrop-blur-sm"
+          aria-label="Restart Session"
+        >
+          Restart Session
+        </button>
         <button 
           onClick={clearSession}
           className="bg-slate-700/50 hover:bg-red-500/50 text-white font-semibold py-2 px-4 border border-slate-600 hover:border-red-500 rounded-lg shadow-lg transition-all duration-300 backdrop-blur-sm"
