@@ -90,8 +90,6 @@ const functionDeclarations: FunctionDeclaration[] = [
   }
 ];
 
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY! });
 const greetingMessage: Message = {
     id: crypto.randomUUID(),
     text: "Hello, I am J.A.R.V.I.S. How can I assist you today?",
@@ -135,13 +133,27 @@ export const useJarvis = () => {
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isThinking, setIsThinking] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
-    // Using 'any' for the session type as it's not exported from the library.
+    const aiRef = useRef<GoogleGenAI | null>(null);
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
     const chatRef = useRef<Chat | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+
+    useEffect(() => {
+        if (!process.env.API_KEY) {
+            setError('J.A.R.V.I.S. is offline. The API_KEY environment variable is not configured.');
+            return;
+        }
+        try {
+            aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        } catch (e) {
+            console.error("Failed to initialize GoogleGenAI:", e);
+            setError('Failed to initialize AI services. Please check the console for details.');
+        }
+    }, []);
 
     useEffect(() => {
         localStorage.setItem('jarvis-messages', JSON.stringify(messages));
@@ -152,8 +164,9 @@ export const useJarvis = () => {
     }, [tasks]);
     
     const speak = useCallback(async (text: string) => {
+        if (!aiRef.current) return;
         try {
-            const response = await ai.models.generateContent({
+            const response = await aiRef.current.models.generateContent({
                 model: "gemini-2.5-flash-preview-tts",
                 contents: [{ parts: [{ text }] }],
                 config: {
@@ -263,7 +276,7 @@ export const useJarvis = () => {
     }, []);
 
     const connect = useCallback(async () => {
-        if (isSessionActive || sessionPromiseRef.current) return;
+        if (!aiRef.current || isSessionActive || sessionPromiseRef.current) return;
         setIsSessionActive(true);
 
         const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
@@ -274,7 +287,7 @@ export const useJarvis = () => {
         let stream: MediaStream | null = null;
         let scriptProcessor: ScriptProcessorNode | null = null;
 
-        sessionPromiseRef.current = ai.live.connect({
+        sessionPromiseRef.current = aiRef.current.live.connect({
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             callbacks: {
                 onopen: async () => {
@@ -381,12 +394,12 @@ export const useJarvis = () => {
     };
     
     const sendTextMessage = async (text: string) => {
-        if (!text.trim()) return;
+        if (!aiRef.current || !text.trim()) return;
         addMessage({ text, sender: Sender.User });
         setIsThinking(true);
         try {
             if (!chatRef.current) {
-                chatRef.current = ai.chats.create({
+                chatRef.current = aiRef.current.chats.create({
                     model: 'gemini-2.5-flash',
                     config: {
                         systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise and to the point. When asked to perform a task, use the available tools.',
@@ -408,5 +421,5 @@ export const useJarvis = () => {
         }
     };
 
-    return { messages, tasks, isSessionActive, isThinking, isProcessing, toggleSession, sendTextMessage };
+    return { messages, tasks, isSessionActive, isThinking, isProcessing, error, toggleSession, sendTextMessage };
 };
