@@ -22,7 +22,7 @@ const App: React.FC = () => {
       <div className="h-screen w-screen bg-slate-900 text-white flex flex-col items-center justify-center font-mono p-4 text-center">
         <h1 className="text-3xl font-bold text-red-500 mb-4">System Malfunction</h1>
         <p className="text-lg mb-2">{error}</p>
-        <p className="text-slate-400">If you are the administrator, please ensure the <code className="bg-slate-700 p-1 rounded">API_KEY</code> is correctly configured in the Vercel project settings.</p>
+        <p className="text-slate-400">If you are the administrator, please ensure the <code className="bg-slate-700 p-1 rounded">VITE_API_KEY</code> is correctly configured in the Vercel project settings.</p>
         <a href="https://vercel.com/docs/projects/environment-variables" target="_blank" rel="noopener noreferrer" className="mt-6 text-cyan-400 hover:underline">
           Vercel Environment Variables Documentation
         </a>

@@ -143,12 +143,16 @@ export const useJarvis = () => {
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
     useEffect(() => {
-        if (!process.env.API_KEY) {
-            setError('J.A.R.V.I.S. is offline. The API_KEY environment variable is not configured.');
+        // Vercel exposes environment variables prefixed with VITE_ to the client-side.
+        // @ts-ignore
+        const apiKey = import.meta.env.VITE_API_KEY;
+
+        if (!apiKey) {
+            setError('J.A.R.V.I.S. is offline. The VITE_API_KEY environment variable is not configured.');
             return;
         }
         try {
-            aiRef.current = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            aiRef.current = new GoogleGenAI({ apiKey: apiKey });
         } catch (e) {
             console.error("Failed to initialize GoogleGenAI:", e);
             setError('Failed to initialize AI services. Please check the console for details.');
