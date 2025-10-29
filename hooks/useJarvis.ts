@@ -145,9 +145,11 @@ export const useJarvis = () => {
     const animationFrameRef = useRef<number>();
 
     useEffect(() => {
-        const apiKey = import.meta.env.VITE_API_KEY;
+        // Fix: The API key must be obtained exclusively from `process.env.API_KEY`.
+        const apiKey = process.env.API_KEY;
         if (!apiKey) {
-            setError('J.A.R.V.I.S. is offline. The VITE_API_KEY environment variable is not configured.');
+            // Fix: Update error message to refer to the correct environment variable.
+            setError('J.A.R.V.I.S. is offline. The API_KEY environment variable is not configured.');
             return;
         }
         try {
@@ -424,7 +426,7 @@ export const useJarvis = () => {
         return () => {
             disconnect();
         }
-    }, [aiRef.current]);
+    }, [aiRef.current, connect, disconnect]);
 
     const clearSession = () => {
         setMessages([greetingMessage]);
