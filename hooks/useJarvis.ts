@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-// FIX: Module '"@google/genai"' has no exported member 'LiveSession'. Replaced with 'Connection'.
-import { GoogleGenAI, Connection, LiveServerMessage, Modality, Type, FunctionDeclaration, Blob, FunctionCall } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration, Blob, FunctionCall, Chat } from "@google/genai";
 import type { Message, Task } from '../types';
 import { Sender, TaskStatus } from '../types';
 
@@ -113,8 +112,9 @@ export const useJarvis = () => {
     const [isThinking, setIsThinking] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
 
-    // FIX: Replaced 'LiveSession' with 'Connection' type.
-    const sessionPromiseRef = useRef<Promise<Connection> | null>(null);
+    // The 'Connection' type is not exported from the library. Using 'any' as a workaround.
+    const sessionPromiseRef = useRef<Promise<any> | null>(null);
+    const chatRef = useRef<Chat | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
@@ -179,7 +179,6 @@ export const useJarvis = () => {
         setMessages(prev => [...prev.filter(m => !m.isPartial), { ...message, id: crypto.randomUUID(), timestamp: new Date().toISOString() }]);
     };
 
-    // FIX: Bug where transcription text was appended instead of replaced.
     const updateLastMessage = (text: string, sender: Sender, isPartial: boolean) => {
         setMessages(prev => {
             const lastMsg = prev[prev.length -1];
@@ -198,7 +197,6 @@ export const useJarvis = () => {
 
         try {
             switch (fc.name) {
-                // FIX: Add type assertions to function call arguments.
                 case 'openUrl':
                     window.open(fc.args.url as string, '_blank');
                     await speak(`Opening ${new URL(fc.args.url as string).hostname}`);
@@ -263,7 +261,6 @@ export const useJarvis = () => {
                     source.connect(scriptProcessor);
                     scriptProcessor.connect(inputAudioContext.destination);
                 },
-                // FIX: Refactor onmessage to handle transcription without deprecated 'isFinal' property.
                 onmessage: async (message: LiveServerMessage) => {
                     if (message.serverContent?.inputTranscription) {
                         setIsThinking(true);
@@ -356,10 +353,16 @@ export const useJarvis = () => {
         addMessage({ text, sender: Sender.User });
         setIsThinking(true);
         try {
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-pro',
-                contents: text,
-            });
+            if (!chatRef.current) {
+                chatRef.current = ai.chats.create({
+                    model: 'gemini-2.5-flash',
+                    config: {
+                        systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise and to the point. When asked to perform a task, use the available tools.',
+                    }
+                });
+            }
+            
+            const response = await chatRef.current.sendMessage({ message: text });
             const aiText = response.text;
             addMessage({ text: aiText, sender: Sender.AI });
             speak(aiText);
@@ -372,7 +375,6 @@ export const useJarvis = () => {
             setIsThinking(false);
         }
     };
-
 
     return { messages, tasks, isSessionActive, isThinking, isProcessing, toggleSession, sendTextMessage };
 };
