@@ -6,9 +6,10 @@ import TaskItem from './TaskItem';
 
 interface TaskListProps {
   tasks: Task[];
+  removeTask: (taskId: string) => void;
 }
 
-const TaskList: React.FC<TaskListProps> = ({ tasks }) => {
+const TaskList: React.FC<TaskListProps> = ({ tasks, removeTask }) => {
   if (tasks.length === 0) {
     return null;
   }
@@ -23,7 +24,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks }) => {
         <div>
           <h3 className="text-md font-semibold text-slate-300 mb-2">In Progress</h3>
           <div className="space-y-2">
-            {inProgressTasks.map(task => <TaskItem key={task.id} task={task} />)}
+            {inProgressTasks.map(task => <TaskItem key={task.id} task={task} removeTask={removeTask} />)}
           </div>
         </div>
       )}
@@ -32,7 +33,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks }) => {
         <div>
            <h3 className="text-md font-semibold text-slate-300 mb-2">Completed</h3>
            <div className="space-y-2">
-            {completedTasks.map(task => <TaskItem key={task.id} task={task} />)}
+            {completedTasks.map(task => <TaskItem key={task.id} task={task} removeTask={removeTask} />)}
           </div>
         </div>
       )}

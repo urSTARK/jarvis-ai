@@ -134,7 +134,9 @@ export const useJarvis = () => {
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isThinking, setIsThinking] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isSpeaking, setIsSpeaking] = useState(false);
     const [micVolume, setMicVolume] = useState(0);
+    const [outputVolume, setOutputVolume] = useState(0);
     const [error, setError] = useState<string | null>(null);
 
     const aiRef = useRef<GoogleGenAI | null>(null);
@@ -143,10 +145,13 @@ export const useJarvis = () => {
     const inputAudioContextRef = useRef<AudioContext | null>(null);
     const mediaStreamRef = useRef<MediaStream | null>(null);
     const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-    const analyserRef = useRef<AnalyserNode | null>(null);
+    const inputAnalyserRef = useRef<AnalyserNode | null>(null);
+    const outputAnalyserRef = useRef<AnalyserNode | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-    const animationFrameRef = useRef<number>();
+    const inputAnimationRef = useRef<number | null>(null);
+    const outputAnimationRef = useRef<number | null>(null);
+
 
     useEffect(() => {
         const apiKey = process.env.API_KEY;
@@ -208,6 +213,10 @@ export const useJarvis = () => {
     
     const updateTask = useCallback((id: string, status: TaskStatus, result?: string) => {
         setTasks(prev => prev.map(t => t.id === id ? { ...t, status, result } : t));
+    }, []);
+
+    const removeTask = useCallback((taskId: string) => {
+        setTasks(prev => prev.filter(t => t.id !== taskId));
     }, []);
     
     const addMessage = useCallback((message: Omit<Message, 'id' | 'timestamp'>) => {
@@ -283,15 +292,13 @@ export const useJarvis = () => {
     }, [speak, addNewTask, addMessage, updateTask]);
     
     const disconnect = useCallback(() => {
-        const currentSessionPromise = sessionPromiseRef.current;
-        currentSessionPromise?.then(session => session.close());
-        
+        sessionPromiseRef.current?.then(session => session.close());
         sessionPromiseRef.current = null;
         
-        if (animationFrameRef.current) {
-            cancelAnimationFrame(animationFrameRef.current);
-            animationFrameRef.current = undefined;
-        }
+        if (inputAnimationRef.current) cancelAnimationFrame(inputAnimationRef.current);
+        if (outputAnimationRef.current) cancelAnimationFrame(outputAnimationRef.current);
+        inputAnimationRef.current = null;
+        outputAnimationRef.current = null;
 
         mediaStreamRef.current?.getTracks().forEach(track => track.stop());
         mediaStreamRef.current = null;
@@ -299,12 +306,12 @@ export const useJarvis = () => {
         scriptProcessorRef.current?.disconnect();
         scriptProcessorRef.current = null;
         
-        analyserRef.current?.disconnect();
-        analyserRef.current = null;
+        inputAnalyserRef.current?.disconnect();
+        inputAnalyserRef.current = null;
+        outputAnalyserRef.current?.disconnect();
+        outputAnalyserRef.current = null;
 
-        if (inputAudioContextRef.current?.state !== 'closed') {
-            inputAudioContextRef.current?.close();
-        }
+        if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
         inputAudioContextRef.current = null;
 
         for (const source of audioSourcesRef.current.values()) source.stop();
@@ -313,11 +320,13 @@ export const useJarvis = () => {
 
         setIsSessionActive(false);
         setIsThinking(false);
+        setIsSpeaking(false);
         setMicVolume(0);
+        setOutputVolume(0);
     }, []);
 
     const connect = useCallback(async () => {
-        if (!aiRef.current || sessionPromiseRef.current) return;
+        if (!aiRef.current || sessionPromiseRef.current || error) return;
         
         setIsSessionActive(true);
 
@@ -327,6 +336,8 @@ export const useJarvis = () => {
         }
         const inputAudioContext = inputAudioContextRef.current;
         const outputCtx = outputAudioContextRef.current;
+        outputAnalyserRef.current = outputCtx.createAnalyser();
+        outputAnalyserRef.current.fftSize = 256;
         nextStartTimeRef.current = 0;
 
         let localStream: MediaStream | null = null;
@@ -340,9 +351,9 @@ export const useJarvis = () => {
                         mediaStreamRef.current = localStream;
                         const source = inputAudioContext.createMediaStreamSource(localStream);
                         scriptProcessorRef.current = inputAudioContext.createScriptProcessor(4096, 1, 1);
-                        analyserRef.current = inputAudioContext.createAnalyser();
+                        inputAnalyserRef.current = inputAudioContext.createAnalyser();
                         
-                        const analyser = analyserRef.current;
+                        const analyser = inputAnalyserRef.current;
                         analyser.fftSize = 512;
                         const bufferLength = analyser.frequencyBinCount;
                         const dataArray = new Uint8Array(bufferLength);
@@ -352,7 +363,7 @@ export const useJarvis = () => {
                         scriptProcessorRef.current.connect(inputAudioContext.destination);
 
                         const draw = () => {
-                            animationFrameRef.current = requestAnimationFrame(draw);
+                            inputAnimationRef.current = requestAnimationFrame(draw);
                             analyser?.getByteTimeDomainData(dataArray);
                             let sum = 0;
                             for(let i = 0; i < bufferLength; i++) {
@@ -402,14 +413,43 @@ export const useJarvis = () => {
                     }
 
                     const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData.data;
-                    if (base64Audio && outputCtx) {
+                    if (base64Audio && outputCtx && outputAnalyserRef.current) {
+                        if (audioSourcesRef.current.size === 0) {
+                            const drawOutput = () => {
+                                const analyser = outputAnalyserRef.current;
+                                if (!analyser || audioSourcesRef.current.size === 0) {
+                                    setOutputVolume(0);
+                                    setIsSpeaking(false);
+                                    if (outputAnimationRef.current) cancelAnimationFrame(outputAnimationRef.current);
+                                    outputAnimationRef.current = null;
+                                    return;
+                                }
+                                outputAnimationRef.current = requestAnimationFrame(drawOutput);
+                                const bufferLength = analyser.frequencyBinCount;
+                                const dataArray = new Uint8Array(bufferLength);
+                                analyser.getByteTimeDomainData(dataArray);
+                                let sum = 0;
+                                for (let i = 0; i < bufferLength; i++) {
+                                    const v = (dataArray[i] / 128.0) - 1.0;
+                                    sum += v * v;
+                                }
+                                const rms = Math.sqrt(sum / bufferLength);
+                                setOutputVolume(rms * 2);
+                                setIsSpeaking(rms > 0.01);
+                            };
+                            drawOutput();
+                        }
                         setIsThinking(false);
                         nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
                         const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
                         const source = outputCtx.createBufferSource();
                         source.buffer = audioBuffer;
-                        source.connect(outputCtx.destination);
-                        source.addEventListener('ended', () => audioSourcesRef.current.delete(source));
+                        source.connect(outputAnalyserRef.current);
+                        outputAnalyserRef.current.connect(outputCtx.destination);
+                        source.addEventListener('ended', () => {
+                          audioSourcesRef.current.delete(source);
+                          if(audioSourcesRef.current.size === 0) setIsSpeaking(false);
+                        });
                         source.start(nextStartTimeRef.current);
                         nextStartTimeRef.current += audioBuffer.duration;
                         audioSourcesRef.current.add(source);
@@ -419,6 +459,7 @@ export const useJarvis = () => {
                         for (const source of audioSourcesRef.current.values()) source.stop();
                         audioSourcesRef.current.clear();
                         nextStartTimeRef.current = 0;
+                        setIsSpeaking(false);
                     }
                 },
                 onerror: (e: ErrorEvent) => {
@@ -439,16 +480,12 @@ export const useJarvis = () => {
                 tools: [{ functionDeclarations }],
             },
         });
-    }, [executeToolCall, disconnect, updateLastMessage]);
+    }, [executeToolCall, disconnect, updateLastMessage, error]);
     
     useEffect(() => {
-        if(aiRef.current && !error) {
-            connect();
-        }
-        return () => {
-            disconnect();
-        }
-    }, [connect, disconnect, error]);
+        connect();
+        return () => disconnect();
+    }, [connect, disconnect]);
 
     const clearSession = () => {
         setMessages([greetingMessage]);
@@ -467,5 +504,5 @@ export const useJarvis = () => {
         setTimeout(() => connect(), 100);
     }, [disconnect, connect, addMessage]);
 
-    return { messages, tasks, isSessionActive, isThinking, isProcessing, micVolume, error, clearSession, restartSession };
+    return { messages, tasks, isSessionActive, isThinking, isProcessing, isSpeaking, micVolume, outputVolume, error, clearSession, restartSession, removeTask };
 };
