@@ -2,7 +2,6 @@ import React from 'react';
 import { useJarvis } from './hooks/useJarvis';
 import Orb from './components/Orb';
 import ChatWindow from './components/ChatWindow';
-import InputBar from './components/InputBar';
 import TaskList from './components/TaskList';
 
 const App: React.FC = () => {
@@ -12,9 +11,9 @@ const App: React.FC = () => {
     isSessionActive, 
     isThinking,
     isProcessing,
+    micVolume,
     error,
-    toggleSession,
-    sendTextMessage 
+    clearSession,
   } = useJarvis();
 
   if (error) {
@@ -32,19 +31,28 @@ const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen bg-slate-900/80 flex flex-col font-sans overflow-hidden">
+      <div className="absolute top-4 right-4 z-10">
+        <button 
+          onClick={clearSession}
+          className="bg-slate-700/50 hover:bg-red-500/50 text-white font-semibold py-2 px-4 border border-slate-600 hover:border-red-500 rounded-lg shadow-lg transition-all duration-300 backdrop-blur-sm"
+          aria-label="Clear Session"
+        >
+          Clear Session
+        </button>
+      </div>
+
       <div className="flex-1 flex flex-col items-center justify-center p-4 overflow-hidden">
-        <Orb isListening={isSessionActive} isThinking={isThinking} isProcessing={isProcessing} />
+        <Orb 
+          isListening={isSessionActive} 
+          isThinking={isThinking} 
+          isProcessing={isProcessing}
+          micVolume={micVolume}
+        />
         <TaskList tasks={tasks} />
       </div>
 
-      <div className="h-1/2 flex flex-col bg-slate-800/60 backdrop-blur-md rounded-t-3xl shadow-2xl border-t-2 border-cyan-400/20">
+      <div className="h-2/3 flex flex-col bg-slate-800/60 backdrop-blur-md rounded-t-3xl shadow-2xl border-t-2 border-red-500/20">
         <ChatWindow messages={messages} />
-        <InputBar 
-          onSendMessage={sendTextMessage}
-          isListening={isSessionActive}
-          onToggleListen={toggleSession}
-          isThinking={isThinking || isProcessing}
-        />
       </div>
     </div>
   );

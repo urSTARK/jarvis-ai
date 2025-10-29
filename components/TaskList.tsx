@@ -18,7 +18,7 @@ const TaskList: React.FC<TaskListProps> = ({ tasks }) => {
 
   return (
     <div className="w-full max-w-md mx-auto p-4 bg-slate-800/50 rounded-lg shadow-lg backdrop-blur-sm mt-4">
-      <h2 className="text-lg font-bold text-cyan-300 mb-3 border-b border-slate-600 pb-2">Task Monitor</h2>
+      <h2 className="text-lg font-bold text-red-400 mb-3 border-b border-slate-600 pb-2">Task Monitor</h2>
       {inProgressTasks.length > 0 && (
         <div>
           <h3 className="text-md font-semibold text-slate-300 mb-2">In Progress</h3>

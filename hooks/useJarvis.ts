@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration, Blob, FunctionCall, Chat } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration, Blob, FunctionCall } from "@google/genai";
 import type { Message, Task } from '../types';
 import { Sender, TaskStatus } from '../types';
 
@@ -57,6 +57,17 @@ function createBlob(data: Float32Array): Blob {
 // --- Function Declarations for the AI ---
 const functionDeclarations: FunctionDeclaration[] = [
   {
+    name: 'searchWeb',
+    parameters: {
+        type: Type.OBJECT,
+        description: 'Searches the web for real-time information on a given topic. Use for recent events, news, or any up-to-date information.',
+        properties: {
+            query: { type: Type.STRING, description: 'The search query.' },
+        },
+        required: ['query'],
+    },
+  },
+  {
     name: 'openUrl',
     parameters: {
       type: Type.OBJECT,
@@ -92,7 +103,7 @@ const functionDeclarations: FunctionDeclaration[] = [
 
 const greetingMessage: Message = {
     id: crypto.randomUUID(),
-    text: "Hello, I am J.A.R.V.I.S. How can I assist you today?",
+    text: "Hello, I am J.A.R.V.I.S. I am online and listening.",
     sender: Sender.AI,
     timestamp: new Date().toISOString()
 };
@@ -103,59 +114,47 @@ export const useJarvis = () => {
             const saved = localStorage.getItem('jarvis-messages');
             if (saved) {
                 const parsed = JSON.parse(saved);
-                if (Array.isArray(parsed)) {
-                    return parsed;
-                }
+                return Array.isArray(parsed) && parsed.length > 0 ? parsed : [greetingMessage];
             }
             return [greetingMessage];
         } catch (error) {
             console.error("Failed to parse messages from localStorage", error);
-            localStorage.removeItem('jarvis-messages');
             return [greetingMessage];
         }
     });
     const [tasks, setTasks] = useState<Task[]>(() => {
         try {
             const saved = localStorage.getItem('jarvis-tasks');
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (Array.isArray(parsed)) {
-                    return parsed;
-                }
-            }
-            return [];
+            return saved ? JSON.parse(saved) : [];
         } catch (error) {
             console.error("Failed to parse tasks from localStorage", error);
-            localStorage.removeItem('jarvis-tasks');
             return [];
         }
     });
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isThinking, setIsThinking] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [micVolume, setMicVolume] = useState(0);
     const [error, setError] = useState<string | null>(null);
 
     const aiRef = useRef<GoogleGenAI | null>(null);
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
-    const chatRef = useRef<Chat | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+    const animationFrameRef = useRef<number>();
 
     useEffect(() => {
-        // Vercel exposes environment variables prefixed with VITE_ to the client-side.
-        // @ts-ignore
         const apiKey = import.meta.env.VITE_API_KEY;
-
         if (!apiKey) {
             setError('J.A.R.V.I.S. is offline. The VITE_API_KEY environment variable is not configured.');
             return;
         }
         try {
-            aiRef.current = new GoogleGenAI({ apiKey: apiKey });
+            aiRef.current = new GoogleGenAI({ apiKey });
         } catch (e) {
             console.error("Failed to initialize GoogleGenAI:", e);
-            setError('Failed to initialize AI services. Please check the console for details.');
+            setError('Failed to initialize AI services.');
         }
     }, []);
 
@@ -166,7 +165,7 @@ export const useJarvis = () => {
     useEffect(() => {
         localStorage.setItem('jarvis-tasks', JSON.stringify(tasks));
     }, [tasks]);
-    
+
     const speak = useCallback(async (text: string) => {
         if (!aiRef.current) return;
         try {
@@ -175,11 +174,7 @@ export const useJarvis = () => {
                 contents: [{ parts: [{ text }] }],
                 config: {
                     responseModalities: [Modality.AUDIO],
-                    speechConfig: {
-                        voiceConfig: {
-                            prebuiltVoiceConfig: { voiceName: 'Kore' },
-                        },
-                    },
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
                 },
             });
             const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
@@ -196,19 +191,14 @@ export const useJarvis = () => {
                 source.start(nextStartTimeRef.current);
                 nextStartTimeRef.current += audioBuffer.duration;
             }
-        } catch (error) {
-            console.error("TTS Error:", error);
-        }
+        } catch (error) { console.error("TTS Error:", error); }
     }, []);
 
     const addNewTask = (description: string): Task => {
         const newTask: Task = {
-            id: crypto.randomUUID(),
-            description,
-            status: TaskStatus.InProgress,
-            startTime: new Date().toISOString(),
+            id: crypto.randomUUID(), description, status: TaskStatus.InProgress, startTime: new Date().toISOString(),
         };
-        setTasks(prev => [newTask, ...prev]);
+        setTasks(prev => [newTask, ...prev.slice(0, 9)]);
         return newTask;
     };
     
@@ -224,7 +214,7 @@ export const useJarvis = () => {
         setMessages(prev => {
             const lastMsg = prev[prev.length -1];
             if (lastMsg?.isPartial && lastMsg.sender === sender) {
-                return [...prev.slice(0, -1), { ...lastMsg, text: text, isPartial }];
+                return [...prev.slice(0, -1), { ...lastMsg, text: lastMsg.text + text, isPartial }];
             }
             const newPartialMessage: Message = { id: crypto.randomUUID(), text, sender, timestamp: new Date().toISOString(), isPartial: true };
             return [...prev, newPartialMessage];
@@ -232,12 +222,27 @@ export const useJarvis = () => {
     };
     
     const executeToolCall = useCallback(async (fc: FunctionCall) => {
-        const task = addNewTask(`Executing: ${fc.name}(${JSON.stringify(fc.args)})`);
+        const task = addNewTask(`Executing: ${fc.name}`);
         setIsProcessing(true);
         let result: any = { status: 'OK' };
 
         try {
             switch (fc.name) {
+                case 'searchWeb':
+                    const query = fc.args.query as string;
+                    await speak(`Searching the web for: ${query}`);
+                    const searchResponse = await aiRef.current!.models.generateContent({
+                        model: "gemini-2.5-flash",
+                        contents: query,
+                        config: { tools: [{googleSearch: {}}] },
+                    });
+                    const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks;
+                    const sources = groundingChunks?.map((chunk: any) => chunk.web) ?? [];
+                    const searchResultText = searchResponse.text;
+                    addMessage({ text: searchResultText, sender: Sender.AI, sources });
+                    await speak(searchResultText);
+                    result = { summary: searchResultText };
+                    break;
                 case 'openUrl':
                     window.open(fc.args.url as string, '_blank');
                     await speak(`Opening ${new URL(fc.args.url as string).hostname}`);
@@ -275,8 +280,10 @@ export const useJarvis = () => {
     
     const disconnect = useCallback(() => {
         sessionPromiseRef.current?.then(session => session.close());
+        if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
         setIsSessionActive(false);
         setIsThinking(false);
+        setMicVolume(0);
     }, []);
 
     const connect = useCallback(async () => {
@@ -290,6 +297,7 @@ export const useJarvis = () => {
 
         let stream: MediaStream | null = null;
         let scriptProcessor: ScriptProcessorNode | null = null;
+        let analyser: AnalyserNode | null = null;
 
         sessionPromiseRef.current = aiRef.current.live.connect({
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -299,6 +307,28 @@ export const useJarvis = () => {
                         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                         const source = inputAudioContext.createMediaStreamSource(stream);
                         scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
+                        analyser = inputAudioContext.createAnalyser();
+                        analyser.fftSize = 512;
+                        const bufferLength = analyser.frequencyBinCount;
+                        const dataArray = new Uint8Array(bufferLength);
+                        
+                        source.connect(analyser);
+                        analyser.connect(scriptProcessor);
+                        scriptProcessor.connect(inputAudioContext.destination);
+
+                        const draw = () => {
+                            animationFrameRef.current = requestAnimationFrame(draw);
+                            analyser?.getByteTimeDomainData(dataArray);
+                            let sum = 0;
+                            for(let i = 0; i < bufferLength; i++) {
+                                const v = (dataArray[i] / 128.0) - 1.0;
+                                sum += v * v;
+                            }
+                            const rms = Math.sqrt(sum / bufferLength);
+                            setMicVolume(rms * 2.5); // Amplify for better visual
+                        };
+                        draw();
+
                         scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
                             const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                             const pcmBlob = createBlob(inputData);
@@ -306,11 +336,9 @@ export const useJarvis = () => {
                                 session.sendRealtimeInput({ media: pcmBlob });
                             });
                         };
-                        source.connect(scriptProcessor);
-                        scriptProcessor.connect(inputAudioContext.destination);
                     } catch (err) {
                         console.error("Error getting audio stream:", err);
-                        addMessage({ text: "Could not start microphone. Please check permissions.", sender: Sender.System });
+                        setError("Microphone access denied. Please enable microphone permissions in your browser settings.");
                         disconnect();
                     }
                 },
@@ -327,9 +355,7 @@ export const useJarvis = () => {
 
                     if (message.serverContent?.turnComplete) {
                         setIsThinking(false);
-                        setMessages(prev =>
-                            prev.map(m => (m.isPartial ? { ...m, isPartial: false } : m))
-                        );
+                        setMessages(prev => prev.map(m => (m.isPartial ? { ...m, isPartial: false } : m)));
                     }
 
                     if (message.toolCall) {
@@ -357,25 +383,26 @@ export const useJarvis = () => {
                     }
 
                     if (message.serverContent?.interrupted) {
-                        for (const source of audioSourcesRef.current.values()) {
-                            source.stop();
-                        }
+                        for (const source of audioSourcesRef.current.values()) source.stop();
                         audioSourcesRef.current.clear();
                         nextStartTimeRef.current = 0;
                     }
                 },
                 onerror: (e: ErrorEvent) => {
                     console.error("Session error:", e);
-                    addMessage({ text: "Session error. Please try again.", sender: Sender.System });
+                    setError("A session error occurred. Please refresh the page.");
                     disconnect();
                 },
                 onclose: () => {
                     stream?.getTracks().forEach(track => track.stop());
                     scriptProcessor?.disconnect();
+                    analyser?.disconnect();
                     if(inputAudioContext.state !== 'closed') inputAudioContext.close();
+                    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
                     sessionPromiseRef.current = null;
                     setIsSessionActive(false);
                     setIsThinking(false);
+                    setMicVolume(0);
                 },
             },
             config: {
@@ -383,47 +410,32 @@ export const useJarvis = () => {
                 speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
                 outputAudioTranscription: {},
                 inputAudioTranscription: {},
-                systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise and to the point. When asked to perform a task, use the available tools.',
+                systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise. Use the searchWeb tool for any questions about recent events or real-time information.',
                 tools: [{ functionDeclarations }],
             },
         });
     }, [isSessionActive, executeToolCall, disconnect]);
     
-    const toggleSession = () => {
-        if (isSessionActive) {
-            disconnect();
-        } else {
+    // Auto-start the session on component mount
+    useEffect(() => {
+        if(aiRef.current) {
             connect();
         }
-    };
-    
-    const sendTextMessage = async (text: string) => {
-        if (!aiRef.current || !text.trim()) return;
-        addMessage({ text, sender: Sender.User });
-        setIsThinking(true);
-        try {
-            if (!chatRef.current) {
-                chatRef.current = aiRef.current.chats.create({
-                    model: 'gemini-2.5-flash',
-                    config: {
-                        systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise and to the point. When asked to perform a task, use the available tools.',
-                    }
-                });
-            }
-            
-            const response = await chatRef.current.sendMessage({ message: text });
-            const aiText = response.text;
-            addMessage({ text: aiText, sender: Sender.AI });
-            speak(aiText);
-        } catch (error) {
-            console.error("Text message error:", error);
-            const errorText = "My apologies, I encountered an error with that request.";
-            addMessage({ text: errorText, sender: Sender.AI });
-            speak(errorText);
-        } finally {
-            setIsThinking(false);
+        return () => {
+            disconnect();
         }
+    }, [aiRef.current]);
+
+    const clearSession = () => {
+        setMessages([greetingMessage]);
+        setTasks([]);
+        localStorage.removeItem('jarvis-messages');
+        localStorage.removeItem('jarvis-tasks');
+        for (const source of audioSourcesRef.current.values()) source.stop();
+        audioSourcesRef.current.clear();
+        nextStartTimeRef.current = 0;
+        addMessage({ sender: Sender.System, text: "Session cleared." });
     };
 
-    return { messages, tasks, isSessionActive, isThinking, isProcessing, error, toggleSession, sendTextMessage };
+    return { messages, tasks, isSessionActive, isThinking, isProcessing, micVolume, error, clearSession };
 };

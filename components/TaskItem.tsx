@@ -13,8 +13,8 @@ const TaskItem: React.FC<TaskItemProps> = ({ task }) => {
       case TaskStatus.InProgress:
         return (
           <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 rounded-full bg-cyan-400 animate-spin"></div>
-            <span className="text-cyan-400 text-sm">Running...</span>
+            <div className="w-3 h-3 rounded-full bg-red-400 animate-spin"></div>
+            <span className="text-red-400 text-sm">Running...</span>
           </div>
         );
       case TaskStatus.Completed:

@@ -16,7 +16,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages }) => {
   const MessageBubble: React.FC<{ message: Message }> = ({ message }) => {
     const isUser = message.sender === Sender.User;
     const bubbleClasses = isUser
-      ? 'bg-blue-600/50 self-end rounded-br-none'
+      ? 'bg-red-600/50 self-end rounded-br-none'
       : 'bg-slate-700/50 self-start rounded-bl-none';
     
     const alignClasses = isUser ? 'items-end' : 'items-start';
@@ -32,8 +32,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages }) => {
               <ul className="list-disc list-inside text-sm">
                 {message.sources.map((source, index) => (
                   <li key={index}>
-                    <a href={source.uri} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:underline">
-                      {source.title}
+                    <a href={source.uri} target="_blank" rel="noopener noreferrer" className="text-red-400 hover:underline">
+                      {source.title || new URL(source.uri).hostname}
                     </a>
                   </li>
                 ))}
