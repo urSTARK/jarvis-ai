@@ -101,18 +101,42 @@ const greetingMessage: Message = {
 
 export const useJarvis = () => {
     const [messages, setMessages] = useState<Message[]>(() => {
-        const saved = localStorage.getItem('jarvis-messages');
-        return saved ? JSON.parse(saved) : [greetingMessage];
+        try {
+            const saved = localStorage.getItem('jarvis-messages');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) {
+                    return parsed;
+                }
+            }
+            return [greetingMessage];
+        } catch (error) {
+            console.error("Failed to parse messages from localStorage", error);
+            localStorage.removeItem('jarvis-messages');
+            return [greetingMessage];
+        }
     });
     const [tasks, setTasks] = useState<Task[]>(() => {
-        const saved = localStorage.getItem('jarvis-tasks');
-        return saved ? JSON.parse(saved) : [];
+        try {
+            const saved = localStorage.getItem('jarvis-tasks');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) {
+                    return parsed;
+                }
+            }
+            return [];
+        } catch (error) {
+            console.error("Failed to parse tasks from localStorage", error);
+            localStorage.removeItem('jarvis-tasks');
+            return [];
+        }
     });
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isThinking, setIsThinking] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
 
-    // The 'Connection' type is not exported from the library. Using 'any' as a workaround.
+    // Using 'any' for the session type as it's not exported from the library.
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
     const chatRef = useRef<Chat | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
@@ -231,6 +255,12 @@ export const useJarvis = () => {
             setIsProcessing(false);
         }
     }, [speak]);
+    
+    const disconnect = useCallback(() => {
+        sessionPromiseRef.current?.then(session => session.close());
+        setIsSessionActive(false);
+        setIsThinking(false);
+    }, []);
 
     const connect = useCallback(async () => {
         if (isSessionActive || sessionPromiseRef.current) return;
@@ -248,18 +278,24 @@ export const useJarvis = () => {
             model: 'gemini-2.5-flash-native-audio-preview-09-2025',
             callbacks: {
                 onopen: async () => {
-                    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                    const source = inputAudioContext.createMediaStreamSource(stream);
-                    scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
-                    scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                        const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-                        const pcmBlob = createBlob(inputData);
-                        sessionPromiseRef.current?.then((session) => {
-                            session.sendRealtimeInput({ media: pcmBlob });
-                        });
-                    };
-                    source.connect(scriptProcessor);
-                    scriptProcessor.connect(inputAudioContext.destination);
+                    try {
+                        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        const source = inputAudioContext.createMediaStreamSource(stream);
+                        scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
+                        scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+                            const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                            const pcmBlob = createBlob(inputData);
+                            sessionPromiseRef.current?.then((session) => {
+                                session.sendRealtimeInput({ media: pcmBlob });
+                            });
+                        };
+                        source.connect(scriptProcessor);
+                        scriptProcessor.connect(inputAudioContext.destination);
+                    } catch (err) {
+                        console.error("Error getting audio stream:", err);
+                        addMessage({ text: "Could not start microphone. Please check permissions.", sender: Sender.System });
+                        disconnect();
+                    }
                 },
                 onmessage: async (message: LiveServerMessage) => {
                     if (message.serverContent?.inputTranscription) {
@@ -314,13 +350,15 @@ export const useJarvis = () => {
                 onerror: (e: ErrorEvent) => {
                     console.error("Session error:", e);
                     addMessage({ text: "Session error. Please try again.", sender: Sender.System });
-                    setIsSessionActive(false);
+                    disconnect();
                 },
                 onclose: () => {
                     stream?.getTracks().forEach(track => track.stop());
                     scriptProcessor?.disconnect();
-                    inputAudioContext.close();
+                    if(inputAudioContext.state !== 'closed') inputAudioContext.close();
                     sessionPromiseRef.current = null;
+                    setIsSessionActive(false);
+                    setIsThinking(false);
                 },
             },
             config: {
@@ -332,14 +370,8 @@ export const useJarvis = () => {
                 tools: [{ functionDeclarations }],
             },
         });
-    }, [isSessionActive, executeToolCall]);
+    }, [isSessionActive, executeToolCall, disconnect]);
     
-    const disconnect = useCallback(() => {
-        sessionPromiseRef.current?.then(session => session.close());
-        setIsSessionActive(false);
-        setIsThinking(false);
-    }, []);
-
     const toggleSession = () => {
         if (isSessionActive) {
             disconnect();
