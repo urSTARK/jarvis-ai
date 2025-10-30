@@ -307,8 +307,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        // Fix: Use process.env.API_KEY as per guidelines.
-        // Use process.env.API_KEY for environment variable access.
+        // Fix: Use process.env.API_KEY to get the Gemini API key as per guidelines. This also resolves the TypeScript error.
         const apiKey = process.env.API_KEY;
         if (!apiKey) {
             setError('Friday is offline. The API_KEY environment variable is not configured.');
