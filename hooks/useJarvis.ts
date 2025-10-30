@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration, Blob, FunctionCall } from "@google/genai";
 import type { Message } from '../types';
@@ -306,7 +307,8 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        // Fix: Use process.env.API_KEY as per the guidelines to get the API key and resolve TypeScript error.
+        // Fix: Use process.env.API_KEY as per guidelines.
+        // Use process.env.API_KEY for environment variable access.
         const apiKey = process.env.API_KEY;
         if (!apiKey) {
             setError('Friday is offline. The API_KEY environment variable is not configured.');

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { useJarvis } from './hooks/useJarvis';
 import Orb from './components/Orb';
@@ -84,7 +85,7 @@ const App: React.FC = () => {
       <div className="h-screen w-screen bg-slate-900 text-white flex flex-col items-center justify-center font-mono p-4 text-center">
         <h1 className="text-3xl font-bold text-red-500 mb-4">System Malfunction</h1>
         <p className="text-lg mb-2">{error}</p>
-        {/* Fix: Updated error message to refer to API_KEY for consistency. */}
+        {/* Fix: Update environment variable name in error message. */}
         <p className="text-slate-400">If you are the administrator, please ensure the <code className="bg-slate-700 p-1 rounded">API_KEY</code> is correctly configured.</p>
       </div>
     );
