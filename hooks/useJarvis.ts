@@ -307,12 +307,11 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        // Fix: Per coding guidelines, the API key must be obtained from process.env.API_KEY.
-        // This also resolves the TypeScript error 'Property 'env' does not exist on type 'ImportMeta''.
-        const apiKey = process.env.API_KEY as string;
+        // Fix: Use process.env.API_KEY as per coding guidelines, which also resolves the TypeScript error.
+        const apiKey = process.env.API_KEY;
         if (!apiKey) {
-            // Fix: Updated error message to reflect the correct environment variable.
-            setError('Friday is offline. The API_KEY environment variable is not configured. Please set it in your project settings.');
+            // This error message guides the user to set the correct variable name in their Vercel settings.
+            setError('Friday is offline. The API_KEY environment variable is not configured. Please set it in your Vercel project settings.');
             return;
         }
         try {
