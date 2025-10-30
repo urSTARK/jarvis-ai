@@ -307,7 +307,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        // Fix: Use process.env.API_KEY to get the Gemini API key as per guidelines. This also resolves the TypeScript error.
+        // Fix: Use process.env.API_KEY as per the coding guidelines to resolve the 'env' property error on 'ImportMeta' and align with API key handling rules.
         const apiKey = process.env.API_KEY;
         if (!apiKey) {
             setError('Friday is offline. The API_KEY environment variable is not configured.');
@@ -426,8 +426,8 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         return { handled: false };
     }, [shutdown]);
 
-    const executeToolCall = useCallback(async (fc: FunctionCall) => {
-        if (!geminiServiceRef.current) return { status: 'ERROR', message: 'Gemini service not initialized.' };
+    const executeToolCall = useCallback(async (fc: FunctionCall): Promise<string> => {
+        if (!geminiServiceRef.current) return 'Gemini service not initialized.';
         setIsProcessing(true);
         let responseTextForSession = 'Task completed successfully.';
 
@@ -461,7 +461,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
             setIsProcessing(false);
         }
 
-        return { result: { message: responseTextForSession }};
+        return responseTextForSession;
     }, [addMessage]);
 
     const sendTextMessage = useCallback(async (message: string) => {
@@ -630,10 +630,18 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
 
                         if (message.toolCall) {
                             setIsThinking(false);
+                            const functionResponses = [];
                             for (const fc of message.toolCall.functionCalls) {
                                 const result = await executeToolCall(fc);
+                                functionResponses.push({
+                                    id: fc.id,
+                                    name: fc.name,
+                                    response: { result },
+                                });
+                            }
+                            if (functionResponses.length > 0) {
                                 sessionPromiseRef.current?.then((s) => {
-                                    s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } });
+                                    s.sendToolResponse({ functionResponses });
                                 });
                             }
                         }
