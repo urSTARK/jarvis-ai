@@ -33,6 +33,18 @@ export class GeminiService {
     });
   }
 
+  // Streaming text generation for chat
+  async generateTextStream(prompt: string, useThinkingMode: boolean = false): Promise<AsyncGenerator<GenerateContentResponse>> {
+    const model = useThinkingMode ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
+    const config = useThinkingMode ? { thinkingConfig: { thinkingBudget: 32768 } } : {};
+    
+    return this.ai.models.generateContentStream({
+        model,
+        contents: prompt,
+        config,
+    });
+  }
+
   // Search Grounding
   async groundedSearch(query: string): Promise<GenerateContentResponse> {
     return this.ai.models.generateContent({

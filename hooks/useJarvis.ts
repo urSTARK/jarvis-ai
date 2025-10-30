@@ -329,7 +329,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
             switch (fc.name) {
                 case 'shutdownAssistant':
                     setIsShutdown(true);
-                    responseTextForSession = 'Acknowledged. Entering standby mode.';
+                    responseTextForSession = ''; // Make shutdown silent
                     updateTask(task.id, TaskStatus.Completed, 'Shutdown command received.');
                     break;
                 case 'searchWeb': {
@@ -368,7 +368,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         }
 
         return { result: { message: responseTextForSession }};
-    }, [addNewTask, updateTask, addMessage]);
+    }, [addNewTask, updateTask, addMessage, setIsShutdown]);
 
     const stopSession = useCallback(async () => {
         if (sessionPromiseRef.current) {
@@ -394,20 +394,43 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     const sendTextMessage = useCallback(async (message: string) => {
         if (!geminiServiceRef.current || isShutdown || !message.trim()) return;
         addMessage({ text: message, sender: Sender.User });
+
+        // Directly handle shutdown command to ensure reliability and silence
+        if (message.toLowerCase().includes('shutdown')) {
+            setIsShutdown(true);
+            return;
+        }
+
         setIsThinkingText(true);
 
         try {
-            const response = await geminiServiceRef.current.generateText(message, false);
-            const responseText = response.text;
-            addMessage({ text: responseText, sender: Sender.AI });
-            await speakText(responseText);
+            const stream = await geminiServiceRef.current.generateTextStream(message, false);
+            let fullText = '';
+            // Start with an empty partial message so the bubble appears immediately
+            updateLastMessage('', Sender.AI, true);
+
+            for await (const chunk of stream) {
+                fullText += chunk.text;
+                updateLastMessage(fullText, Sender.AI, true);
+            }
+            
+            // Finalize the message by updating it with isPartial: false
+            updateLastMessage(fullText, Sender.AI, false);
+            
+            // Speak the full response at the end
+            if (fullText) {
+                await speakText(fullText);
+            }
+
         } catch (e) {
             console.error("Error in text chat:", e);
-            addMessage({ text: "My apologies, I encountered an error.", sender: Sender.System });
+            const errorMessage = "My apologies, I encountered a communication error.";
+            // Finalize the message with an error, replacing any partial content
+            updateLastMessage(errorMessage, Sender.System, false);
         } finally {
             setIsThinkingText(false);
         }
-    }, [addMessage, speakText, isShutdown]);
+    }, [addMessage, speakText, isShutdown, updateLastMessage, setIsShutdown]);
 
     const startSession = useCallback(async () => {
         if (!aiRef.current || sessionPromiseRef.current || isSessionActive || isShutdown) return;
@@ -458,6 +481,21 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                     onmessage: async (message: LiveServerMessage) => {
                         if (message.serverContent?.inputTranscription) {
                             currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
+                             // Immediate shutdown interception
+                            if (currentInputTranscriptionRef.current.toLowerCase().includes('shutdown')) {
+                                // Stop any speaking immediately
+                                audioSourcesRef.current.forEach(source => source.stop());
+                                audioSourcesRef.current.clear();
+                                setIsSpeaking(false);
+                                
+                                // Finalize the user's message and prevent it from being re-added
+                                updateLastMessage(currentInputTranscriptionRef.current.trim(), Sender.User, false);
+                                currentInputTranscriptionRef.current = '';
+                                
+                                // Trigger shutdown
+                                setIsShutdown(true); 
+                                return; // Exit message handler early
+                            }
                             updateLastMessage(currentInputTranscriptionRef.current, Sender.User, true);
                         } else if (message.serverContent?.outputTranscription) {
                             setIsThinking(false);
@@ -536,10 +574,17 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
             // If a command was captured during wake-up, process it.
             if (commandToRun) {
                 initialCommandAfterWakeUpRef.current = null; // Consume the command so it doesn't run again.
-                sendTextMessage(commandToRun);
+                
+                // Directly handle shutdown command to ensure reliability
+                if (commandToRun.toLowerCase().includes('shutdown')) {
+                    setIsShutdown(true);
+                    addMessage({ sender: Sender.AI, text: "Acknowledged. Entering standby mode." });
+                } else {
+                    sendTextMessage(commandToRun);
+                }
             }
         }
-    }, [isShutdown, sendTextMessage]);
+    }, [isShutdown, sendTextMessage, addMessage, setIsShutdown]);
 
     // Effect to manage the main Gemini Live session based on operational state
     useEffect(() => {
