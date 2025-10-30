@@ -306,9 +306,9 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        const apiKey = process.env.API_KEY;
+        const apiKey = process.env.GEMINI_KEY;
         if (!apiKey) {
-            setError('Friday is offline. The API_KEY environment variable is not configured.');
+            setError('Friday is offline. The GEMINI_KEY environment variable is not configured.');
             return;
         }
         try {
