@@ -48,6 +48,7 @@ interface LocalCommandResult {
     responseText?: string;
 }
 
+// Fix: Add missing and correct buggy audio helper functions.
 // --- Helper functions for audio processing ---
 function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
@@ -57,6 +58,15 @@ function decode(base64: string): Uint8Array {
     bytes[i] = binaryString.charCodeAt(i);
   }
   return bytes;
+}
+
+function encode(bytes: Uint8Array) {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
 }
 
 async function decodeAudioData(
@@ -76,15 +86,6 @@ async function decodeAudioData(
     }
   }
   return buffer;
-}
-
-function encode(bytes: Uint8Array): string {
-  let binary = '';
-  const len = bytes.byteLength;
-  for (let i = 0; i < len; i++) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
 }
 
 function createBlob(data: Float32Array): Blob {
@@ -307,11 +308,13 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        // Fix: Use process.env.API_KEY as required by the coding guidelines. This resolves the TypeScript error with import.meta.env.
-        const apiKey = process.env.API_KEY;
+        // For Vite applications hosted on platforms like Vercel, environment variables
+        // must be prefixed with VITE_ and accessed via import.meta.env.
+        const apiKey = (import.meta as any).env.VITE_API_KEY;
+
         if (!apiKey) {
-            // This error message guides the user to set the correct variable.
-            setError('Friday is offline. The API_KEY environment variable is not configured. Please set it in your project settings.');
+            // This updated error message guides the user to set the correct variable name in their hosting environment.
+            setError('Friday is offline. The VITE_API_KEY environment variable is not configured. Please set it in your Vercel project settings.');
             return;
         }
         try {
