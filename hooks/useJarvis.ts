@@ -95,6 +95,14 @@ const functionDeclarations: FunctionDeclaration[] = [
       required: ['prompt'],
     },
   },
+  {
+    name: 'shutdownAssistant',
+    parameters: {
+      type: Type.OBJECT,
+      description: 'Puts the assistant into a low-power standby mode. The assistant will stop listening for general commands and only listen for a wake word to reactivate.',
+      properties: {},
+    },
+  },
 ];
 
 const createGreetingMessage = (name: string | null): Message => {
@@ -131,6 +139,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     const [isThinkingText, setIsThinkingText] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
+    const [isShutdown, setIsShutdown] = useState(false);
     const [micVolume, setMicVolume] = useState(0);
     const [outputVolume, setOutputVolume] = useState(0);
     const [error, setError] = useState<string | null>(null);
@@ -146,12 +155,14 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     const inputAnalyserRef = useRef<AnalyserNode | null>(null);
     const outputAnalyserRef = useRef<AnalyserNode | null>(null);
     const outputGainNodeRef = useRef<GainNode | null>(null);
+    const wakeWordRecognizerRef = useRef<any | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
     const inputAnimationRef = useRef<number | null>(null);
     const outputAnimationRef = useRef<number | null>(null);
     const currentInputTranscriptionRef = useRef('');
     const currentOutputTranscriptionRef = useRef('');
+    const initialCommandAfterWakeUpRef = useRef<string | null>(null);
 
     const initializeOutputAudio = useCallback(async () => {
         if (outputAudioContextRef.current && outputAudioContextRef.current.state === 'running') {
@@ -171,7 +182,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                 const analyserNode = ctx.createAnalyser();
                 analyserNode.fftSize = 512;
                 
-                // Serial audio graph: Source -> Gain -> Analyser -> Destination
                 gainNode.connect(analyserNode);
                 analyserNode.connect(ctx.destination);
                 
@@ -265,8 +275,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         }
     }, []);
     
-    // This effect speaks the greeting message once the user's name is known AND the user has
-    // interacted with the page to allow audio playback.
     useEffect(() => {
         const saved = localStorage.getItem(LOCAL_STORAGE_MESSAGES_KEY);
         if ((!saved || JSON.parse(saved).length <= 1) && userName && isAudioReady) {
@@ -319,6 +327,11 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
 
         try {
             switch (fc.name) {
+                case 'shutdownAssistant':
+                    setIsShutdown(true);
+                    responseTextForSession = 'Acknowledged. Entering standby mode.';
+                    updateTask(task.id, TaskStatus.Completed, 'Shutdown command received.');
+                    break;
                 case 'searchWeb': {
                     const { query } = fc.args;
                     const response = await geminiServiceRef.current.groundedSearch(query as string);
@@ -359,12 +372,16 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
 
     const stopSession = useCallback(async () => {
         if (sessionPromiseRef.current) {
-            const session = await sessionPromiseRef.current;
-            session.close();
-            sessionPromiseRef.current = null;
+            try {
+                const session = await sessionPromiseRef.current;
+                session.close();
+            } catch (e) {
+                console.warn("Error closing session, it might have been closed already.", e);
+            } finally {
+                sessionPromiseRef.current = null;
+            }
         }
         if (inputAnimationRef.current) cancelAnimationFrame(inputAnimationRef.current);
-        // Do not cancel the output animation frame, as TTS may still be playing
         scriptProcessorRef.current?.disconnect();
         mediaStreamRef.current?.getTracks().forEach(track => track.stop());
         if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
@@ -374,10 +391,29 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         setMicVolume(0);
     }, []);
 
+    const sendTextMessage = useCallback(async (message: string) => {
+        if (!geminiServiceRef.current || isShutdown || !message.trim()) return;
+        addMessage({ text: message, sender: Sender.User });
+        setIsThinkingText(true);
+
+        try {
+            const response = await geminiServiceRef.current.generateText(message, false);
+            const responseText = response.text;
+            addMessage({ text: responseText, sender: Sender.AI });
+            await speakText(responseText);
+        } catch (e) {
+            console.error("Error in text chat:", e);
+            addMessage({ text: "My apologies, I encountered an error.", sender: Sender.System });
+        } finally {
+            setIsThinkingText(false);
+        }
+    }, [addMessage, speakText, isShutdown]);
+
     const startSession = useCallback(async () => {
-        if (!aiRef.current || sessionPromiseRef.current || isSessionActive) return;
+        if (!aiRef.current || sessionPromiseRef.current || isSessionActive || isShutdown) return;
         
         await initializeOutputAudio();
+        addMessage({ sender: Sender.System, text: "Activating live session..." });
 
         try {
             mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -406,7 +442,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                 config: {
                     responseModalities: [Modality.AUDIO],
                     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-                    systemInstruction: `You are Friday, a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise unless asked for detail. The user's name is ${userName || 'Sir/Ma\'am'}. Address them by their name when appropriate. You can generate images and search the web.`,
+                    systemInstruction: `You are Friday, a witty, helpful, and slightly sarcastic AI assistant. The user can shut you down by saying "shutdown". Your name is the wake word. Keep your responses concise unless asked for detail. The user's name is ${userName || 'Sir/Ma\'am'}. Address them by their name when appropriate. You can generate images and search the web.`,
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
                     tools: [{ functionDeclarations }],
@@ -420,7 +456,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                         };
                     },
                     onmessage: async (message: LiveServerMessage) => {
-                       // Transcription handling, state updates, etc.
                         if (message.serverContent?.inputTranscription) {
                             currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
                             updateLastMessage(currentInputTranscriptionRef.current, Sender.User, true);
@@ -436,9 +471,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                             if (currentOutputTranscriptionRef.current.trim()) addMessage({ text: currentOutputTranscriptionRef.current.trim(), sender: Sender.AI });
                             currentInputTranscriptionRef.current = '';
                             currentOutputTranscriptionRef.current = '';
-                            // DO NOT set isSpeaking to false here. This causes a race condition where the orb animation
-                            // stops before the final audio chunk has finished playing. The 'ended' event on the
-                            // audio source is the correct source of truth for this state.
                             setIsThinking(false);
                         }
 
@@ -477,7 +509,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                         stopSession();
                     },
                     onclose: () => {
-                        console.log('Friday session closed.');
                         stopSession();
                     },
                 }
@@ -486,26 +517,98 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
             console.error("Failed to start session:", e);
             setError(`Failed to start session: ${(e as Error).message}. Check microphone permissions.`);
         }
-    }, [isSessionActive, addMessage, updateLastMessage, executeToolCall, stopSession, initializeOutputAudio, userName]);
+    }, [isSessionActive, addMessage, updateLastMessage, executeToolCall, stopSession, initializeOutputAudio, userName, isShutdown]);
 
-    const sendTextMessage = useCallback(async (message: string) => {
-        if (!geminiServiceRef.current) return;
-        addMessage({ text: message, sender: Sender.User });
-        setIsThinkingText(true);
-
-        try {
-            const response = await geminiServiceRef.current.generateText(message, false);
-            const responseText = response.text;
-            addMessage({ text: responseText, sender: Sender.AI });
-            await speakText(responseText);
-        } catch (e) {
-            console.error("Error in text chat:", e);
-            addMessage({ text: "My apologies, I encountered an error.", sender: Sender.System });
-        } finally {
-            setIsThinkingText(false);
+    const handleWakeUp = useCallback((command?: string) => {
+        if (isShutdown) {
+            if (command) {
+                initialCommandAfterWakeUpRef.current = command;
+            }
+            setIsShutdown(false);
         }
-    }, [addMessage, speakText]);
+    }, [isShutdown]);
 
+    // Effect to process a command that was spoken along with the wake word.
+    useEffect(() => {
+        // This effect runs when the system is not in shutdown mode.
+        if (!isShutdown) {
+            const commandToRun = initialCommandAfterWakeUpRef.current;
+            // If a command was captured during wake-up, process it.
+            if (commandToRun) {
+                initialCommandAfterWakeUpRef.current = null; // Consume the command so it doesn't run again.
+                sendTextMessage(commandToRun);
+            }
+        }
+    }, [isShutdown, sendTextMessage]);
+
+    // Effect to manage the main Gemini Live session based on operational state
+    useEffect(() => {
+        if (!isShutdown && userName && isAudioReady && !isSessionActive) {
+            startSession();
+        } else if (isShutdown || !isAudioReady) {
+            stopSession();
+        }
+    }, [isShutdown, userName, isAudioReady, isSessionActive, startSession, stopSession]);
+    
+    // Effect to manage the lightweight wake-word listener
+    useEffect(() => {
+        if (!isShutdown) {
+            if (wakeWordRecognizerRef.current) {
+                wakeWordRecognizerRef.current.onend = null;
+                wakeWordRecognizerRef.current.stop();
+                wakeWordRecognizerRef.current = null;
+            }
+            return;
+        }
+
+        // isShutdown is true, start listener
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            addMessage({ sender: Sender.System, text: "Wake word feature is not supported by your browser." });
+            return;
+        }
+
+        if (wakeWordRecognizerRef.current) return;
+
+        addMessage({ sender: Sender.System, text: "Entering standby. Say 'Friday' to wake me." });
+        const recognizer = new SpeechRecognition();
+        wakeWordRecognizerRef.current = recognizer;
+        
+        recognizer.continuous = true;
+        recognizer.interimResults = true;
+        
+        recognizer.onresult = (event: any) => {
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                const transcript = event.results[i][0].transcript.trim().toLowerCase();
+                const wakeWordIndex = transcript.indexOf('friday');
+    
+                if (wakeWordIndex !== -1) {
+                    const command = transcript.substring(wakeWordIndex + 'friday'.length).trim();
+                    handleWakeUp(command);
+                    return; // Stop processing once wake word is found
+                }
+            }
+        };
+        
+        recognizer.onerror = (event: any) => {
+            console.error('Wake word recognition error:', event.error);
+        };
+
+        recognizer.onend = () => {
+            if (wakeWordRecognizerRef.current) {
+                recognizer.start(); // Keep it running
+            }
+        };
+
+        recognizer.start();
+
+        return () => {
+            if (recognizer) {
+                recognizer.onend = null;
+                recognizer.stop();
+            }
+        };
+    }, [isShutdown, handleWakeUp, addMessage]);
 
     const clearSession = useCallback(() => {
         setMessages([createGreetingMessage(userName)]);
@@ -515,6 +618,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [userName]);
 
     const restartSession = useCallback(async () => {
+        setIsShutdown(false); // Ensure we are not in shutdown state
         await stopSession();
         clearSession();
         setTimeout(startSession, 100);
@@ -523,6 +627,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     return {
         messages, isSessionActive, isThinking, isProcessing, isSpeaking, micVolume, outputVolume, error,
         clearSession, restartSession, sendTextMessage, isThinkingText, startSession, stopSession,
-        geminiService: geminiServiceRef.current, hasVeoApiKey, addMessage, initializeOutputAudio
+        geminiService: geminiServiceRef.current, hasVeoApiKey, addMessage, initializeOutputAudio,
+        isShutdown, handleWakeUp,
     };
 };

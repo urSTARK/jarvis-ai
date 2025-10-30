@@ -187,6 +187,7 @@ const App: React.FC = () => {
     isThinking,
     isProcessing,
     isSpeaking,
+    isShutdown,
     micVolume,
     outputVolume,
     error,
@@ -200,18 +201,11 @@ const App: React.FC = () => {
     hasVeoApiKey,
     addMessage,
     initializeOutputAudio,
+    handleWakeUp,
   } = useJarvis(userName, isAudioReady);
 
   const [isChatVisible, setIsChatVisible] = useState(true);
   const [activeMode, setActiveMode] = useState('chat'); // 'chat' or 'tools'
-
-  useEffect(() => {
-    // Start listening for voice input once we have a user name and audio is ready.
-    if (userName && isAudioReady) {
-      startSession();
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userName, isAudioReady]);
 
   const handleNameSubmit = async (name: string) => {
     if (initializeOutputAudio) {
@@ -283,6 +277,7 @@ const App: React.FC = () => {
           isThinking={isThinking || isThinkingText} 
           isProcessing={isProcessing}
           isSpeaking={isSpeaking}
+          isShutdown={isShutdown}
           micVolume={micVolume}
           outputVolume={outputVolume}
         />
@@ -308,6 +303,8 @@ const App: React.FC = () => {
               isListening={isSessionActive}
               onToggleListen={isSessionActive ? stopSession : startSession}
               isThinking={isThinking || isThinkingText}
+              isShutdown={isShutdown}
+              onWakeUp={() => handleWakeUp()}
             />
           </>
         ) : (

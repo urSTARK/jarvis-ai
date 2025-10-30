@@ -5,6 +5,7 @@ interface OrbProps {
   isThinking: boolean;
   isProcessing: boolean;
   isSpeaking: boolean;
+  isShutdown: boolean;
   micVolume: number;
   outputVolume: number;
 }
@@ -38,6 +39,7 @@ const COLORS = {
   THINKING: 'rgb(138, 43, 226)',      // #8A2BE2 - BlueViolet
   PROCESSING: 'rgb(255, 165, 0)',     // #FFA500 - Orange
   DEFAULT: 'rgb(255, 58, 58)',        // #FF3A3A for default/idle state
+  SHUTDOWN: 'rgb(139, 0, 0)',         // #8B0000 - DarkRed for standby
 };
 
 const ringConfig = [
@@ -50,9 +52,8 @@ const ringConfig = [
 ];
 
 
-const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume }) => {
+const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume }) => {
   const pathRefs = useRef<(SVGPathElement | null)[]>([]);
-  // Fix: Initialize useRef with null to prevent "Expected 1 arguments, but got 0" error in some environments.
   const animationFrameRef = useRef<number | null>(null);
   const smoothedVolumeRef = useRef(0);
   const isInitialMount = useRef(true);
@@ -68,13 +69,15 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
         navigator.vibrate(50);
       }
     }
-  }, [isListening, isThinking, isProcessing, isSpeaking]);
+  }, [isListening, isThinking, isProcessing, isSpeaking, isShutdown]);
   
   // Determine current color based on state
   useEffect(() => {
     let color = COLORS.DEFAULT; // Start with the default red.
 
-    if (isProcessing) {
+    if (isShutdown) {
+        color = COLORS.SHUTDOWN;
+    } else if (isProcessing) {
       color = COLORS.PROCESSING;
     } else if (isSpeaking) {
       color = COLORS.SPEAKING;
@@ -98,10 +101,11 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
       }
     }
     setCurrentColor(color);
-  }, [isListening, isThinking, isProcessing, isSpeaking, micVolume]);
+  }, [isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume]);
 
 
   const getStatusText = () => {
+    if (isShutdown) return "Standby";
     if (isProcessing) return "Processing...";
     if (isSpeaking) return "Answering...";
     if (isThinking) return "Thinking...";
@@ -110,23 +114,25 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
   };
   
   // Keep a ref to the latest props to avoid re-running the effect on every frame.
-  const latestProps = useRef({ isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume });
+  const latestProps = useRef({ isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume });
   useEffect(() => {
-    latestProps.current = { isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume };
+    latestProps.current = { isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume };
   });
 
   useEffect(() => {
     const animate = (time: number) => {
       // Get the latest props from the ref inside the animation loop.
-      const { isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume } = latestProps.current;
+      const { isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume } = latestProps.current;
       const timeInSeconds = time * 0.001;
       
       let targetAmplitude = 0;
-      // Define a base rotation speed that changes based on the state.
       let baseRotationSpeed = 1.0; // Default idle speed
 
-      // The order of these checks is critical for correct state display.
-      if (isSpeaking) {
+      if (isShutdown) {
+        const pulse = (Math.sin(timeInSeconds * 0.7) + 1) / 2; // Slow pulse
+        targetAmplitude = 2 + (pulse * 2);
+        baseRotationSpeed = 0.2; // Very slow rotation
+      } else if (isSpeaking) {
         targetAmplitude = Math.min(outputVolume * 200, 100);
         baseRotationSpeed = 2.5; // Significantly faster when speaking
       } else if (isProcessing) {
@@ -152,28 +158,23 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
       const centerX = 200;
       const centerY = 200;
       
-      // Create a slow, oscillating "drift" in the rotation speed for a fluid, random-like effect.
-      // This factor will gently speed up and slow down the base rotation.
-      const fluidRotationFactor = 1 + Math.sin(timeInSeconds * 0.5) * 0.2; // Varies between 0.8 and 1.2
-      const expansionPulse = Math.sin(timeInSeconds * 1.5) * 6; // A global pulse for expansion/compression
+      const fluidRotationFactor = 1 + Math.sin(timeInSeconds * 0.5) * 0.2;
+      const expansionPulse = isShutdown ? 0 : Math.sin(timeInSeconds * 1.5) * 6;
 
       pathRefs.current.forEach((path, index) => {
         if (!path) return;
 
         const config = ringConfig[index];
         
-        // Swirling effect: combine base speed, fluid factor, and individual ring speed.
         const rotation = timeInSeconds * 0.3 * config.speed * baseRotationSpeed * fluidRotationFactor;
         
         let d = '';
         
         for (let i = 0; i <= points; i++) {
-          const angle = (i / points) * Math.PI * 2 + rotation; // Apply rotation here
+          const angle = (i / points) * Math.PI * 2 + rotation;
           
-          // Use the smoothed volume to control the wave amplitude
           const amplitude = smoothedVolumeRef.current * config.amplitudeFactor;
           
-          // Combine sine waves for a more organic, fluid, and randomized feel
           const timeFactor = time * 0.0002;
           const displacement1 = Math.sin(angle * config.frequency.f1 + timeFactor * config.speed) * amplitude;
           const displacement2 = Math.sin(angle * config.frequency.f2 - timeFactor * config.speed * 0.7) * amplitude * 0.5;
@@ -211,7 +212,7 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
       <svg
         viewBox="0 0 400 400"
         className="absolute w-full h-full transition-all duration-300"
-        style={{ filter: `drop-shadow(0 0 35px ${currentColor}) drop-shadow(0 0 10px ${currentColor})` }}
+        style={{ filter: `drop-shadow(0 0 ${isShutdown ? 15 : 35}px ${currentColor}) drop-shadow(0 0 ${isShutdown ? 5 : 10}px ${currentColor})` }}
       >
         <defs>
           <filter id="inner-shadow">
