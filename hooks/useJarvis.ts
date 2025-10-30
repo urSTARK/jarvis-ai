@@ -307,10 +307,12 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        // Fix: Use process.env.API_KEY as per the coding guidelines to resolve the 'env' property error on 'ImportMeta' and align with API key handling rules.
-        const apiKey = process.env.API_KEY;
+        // Fix: Per coding guidelines, the API key must be obtained from process.env.API_KEY.
+        // This also resolves the TypeScript error 'Property 'env' does not exist on type 'ImportMeta''.
+        const apiKey = process.env.API_KEY as string;
         if (!apiKey) {
-            setError('Friday is offline. The API_KEY environment variable is not configured.');
+            // Fix: Updated error message to reflect the correct environment variable.
+            setError('Friday is offline. The API_KEY environment variable is not configured. Please set it in your project settings.');
             return;
         }
         try {
