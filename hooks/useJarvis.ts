@@ -383,8 +383,13 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         }
         if (inputAnimationRef.current) cancelAnimationFrame(inputAnimationRef.current);
         scriptProcessorRef.current?.disconnect();
-        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
-        if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
+        // Do NOT stop mediaStream tracks here, so the wake word listener can use it.
+        // Close the input audio context to stop processing for the live session.
+        if (inputAudioContextRef.current?.state !== 'closed') {
+             inputAudioContextRef.current?.close().then(() => {
+                inputAudioContextRef.current = null;
+             });
+        }
         audioSourcesRef.current.forEach(source => source.stop());
         audioSourcesRef.current.clear();
         setIsSessionActive(false);
@@ -439,7 +444,11 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         addMessage({ sender: Sender.System, text: "Activating live session..." });
 
         try {
-            mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Reuse the media stream if it exists and is active, otherwise get a new one.
+            if (!mediaStreamRef.current || mediaStreamRef.current.getAudioTracks().every(t => t.readyState === 'ended')) {
+                mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+            }
+            
             inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
             
             const inputSource = inputAudioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
@@ -599,6 +608,8 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     useEffect(() => {
         if (!isShutdown) {
             if (wakeWordRecognizerRef.current) {
+                wakeWordRecognizerRef.current.onresult = null;
+                wakeWordRecognizerRef.current.onerror = null;
                 wakeWordRecognizerRef.current.onend = null;
                 wakeWordRecognizerRef.current.stop();
                 wakeWordRecognizerRef.current = null;
@@ -625,9 +636,8 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         recognizer.onresult = (event: any) => {
             for (let i = event.resultIndex; i < event.results.length; ++i) {
                 const transcript = event.results[i][0].transcript.trim().toLowerCase();
-                const wakeWordIndex = transcript.indexOf('friday');
-    
-                if (wakeWordIndex !== -1) {
+                if (transcript.includes('friday')) {
+                    const wakeWordIndex = transcript.indexOf('friday');
                     const command = transcript.substring(wakeWordIndex + 'friday'.length).trim();
                     handleWakeUp(command);
                     return; // Stop processing once wake word is found
@@ -637,11 +647,20 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         
         recognizer.onerror = (event: any) => {
             console.error('Wake word recognition error:', event.error);
+             if (event.error === 'not-allowed') {
+                addMessage({ sender: Sender.System, text: "Microphone access denied. Wake word is disabled." });
+                if (wakeWordRecognizerRef.current) {
+                    wakeWordRecognizerRef.current.onend = null; // Prevent restart
+                    wakeWordRecognizerRef.current.stop();
+                    wakeWordRecognizerRef.current = null;
+                }
+            }
         };
 
         recognizer.onend = () => {
+            // Only restart if the ref still exists, meaning we haven't intentionally stopped it.
             if (wakeWordRecognizerRef.current) {
-                recognizer.start(); // Keep it running
+                recognizer.start();
             }
         };
 
@@ -649,11 +668,28 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
 
         return () => {
             if (recognizer) {
+                recognizer.onresult = null;
+                recognizer.onerror = null;
                 recognizer.onend = null;
                 recognizer.stop();
             }
         };
     }, [isShutdown, handleWakeUp, addMessage]);
+
+    // Final cleanup on component unmount
+    useEffect(() => {
+        return () => {
+            stopSession();
+            if (mediaStreamRef.current) {
+                mediaStreamRef.current.getTracks().forEach(track => track.stop());
+            }
+            if (wakeWordRecognizerRef.current) {
+                wakeWordRecognizerRef.current.onend = null;
+                wakeWordRecognizerRef.current.stop();
+            }
+        }
+    }, [stopSession]);
+
 
     const clearSession = useCallback(() => {
         setMessages([createGreetingMessage(userName)]);
