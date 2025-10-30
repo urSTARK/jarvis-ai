@@ -1,9 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useJarvis } from './hooks/useJarvis';
 import Orb from './components/Orb';
 import ChatWindow from './components/ChatWindow';
 import FluidBackground from './components/FluidBackground';
 import InputBar from './components/InputBar';
+import NamePrompt from './components/NamePrompt';
 
 const Toolbelt: React.FC<{ 
   geminiService: ReturnType<typeof useJarvis>['geminiService'],
@@ -164,7 +165,7 @@ const Toolbelt: React.FC<{
                   {activeTab === 'analyzer' && renderAnalyzer()}
                 </div>
                 <div className="flex items-center justify-center bg-slate-900/50 rounded-lg min-h-[200px]">
-                  {isLoading && <div className="text-slate-300">J.A.R.V.I.S. is working...</div>}
+                  {isLoading && <div className="text-slate-300">Friday is working...</div>}
                   {error && <div className="text-red-400 p-4 text-center">{error}</div>}
                   {mediaResult?.type === 'image' && <img src={mediaResult.src} alt="Generated result" className="max-h-full max-w-full object-contain rounded"/>}
                   {mediaResult?.type === 'video' && <video src={mediaResult.src} controls autoPlay className="max-h-full max-w-full object-contain rounded"/>}
@@ -177,6 +178,9 @@ const Toolbelt: React.FC<{
 
 
 const App: React.FC = () => {
+  const [userName, setUserName] = useState<string | null>(() => localStorage.getItem('friday-userName'));
+  const [isAudioReady, setIsAudioReady] = useState(false);
+
   const { 
     messages, 
     isSessionActive, 
@@ -195,10 +199,35 @@ const App: React.FC = () => {
     geminiService,
     hasVeoApiKey,
     addMessage,
-  } = useJarvis();
+    initializeOutputAudio,
+  } = useJarvis(userName, isAudioReady);
 
   const [isChatVisible, setIsChatVisible] = useState(true);
   const [activeMode, setActiveMode] = useState('chat'); // 'chat' or 'tools'
+
+  useEffect(() => {
+    // Start listening for voice input once we have a user name and audio is ready.
+    if (userName && isAudioReady) {
+      startSession();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userName, isAudioReady]);
+
+  const handleNameSubmit = async (name: string) => {
+    if (initializeOutputAudio) {
+        await initializeOutputAudio();
+    }
+    localStorage.setItem('friday-userName', name);
+    setUserName(name);
+    setIsAudioReady(true);
+  };
+
+  const handleActivate = async () => {
+    if (initializeOutputAudio) {
+        await initializeOutputAudio();
+    }
+    setIsAudioReady(true);
+  }
 
   if (error) {
     return (
@@ -212,6 +241,17 @@ const App: React.FC = () => {
 
   return (
     <div className="relative h-screen w-screen flex flex-col font-sans overflow-hidden">
+      {!userName && <NamePrompt onNameSubmit={handleNameSubmit} />}
+      {userName && !isAudioReady && (
+        <div className="absolute inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center">
+            <button 
+                onClick={handleActivate}
+                className="bg-red-600 hover:bg-red-500 text-white font-bold py-4 px-8 rounded-full transition-all duration-300 shadow-lg shadow-red-500/50 transform hover:scale-105"
+            >
+                Activate Friday
+            </button>
+        </div>
+      )}
       <FluidBackground />
       <div className="absolute top-4 right-4 z-20 flex items-center space-x-2">
         <button 
@@ -254,7 +294,7 @@ const App: React.FC = () => {
       >
         <div className="flex-shrink-0 bg-black/30 flex items-center px-4">
             <button onClick={() => setActiveMode('chat')} className={`px-4 py-3 text-sm font-medium ${activeMode === 'chat' ? 'text-white border-b-2 border-red-500' : 'text-slate-400'}`}>
-                J.A.R.V.I.S. Chat
+                Friday Chat
             </button>
             <button onClick={() => setActiveMode('tools')} className={`px-4 py-3 text-sm font-medium ${activeMode === 'tools' ? 'text-white border-b-2 border-red-500' : 'text-slate-400'}`}>
                 Toolbelt

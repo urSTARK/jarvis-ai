@@ -5,8 +5,8 @@ import { Sender, TaskStatus } from '../types';
 import { GeminiService } from '../services/geminiService';
 
 // --- Constants for localStorage keys ---
-const LOCAL_STORAGE_MESSAGES_KEY = 'jarvis-messages';
-const LOCAL_STORAGE_TASKS_KEY = 'jarvis-tasks';
+const LOCAL_STORAGE_MESSAGES_KEY = 'friday-messages';
+const LOCAL_STORAGE_TASKS_KEY = 'friday-tasks';
 
 // --- Helper functions for audio processing ---
 function decode(base64: string): Uint8Array {
@@ -97,19 +97,28 @@ const functionDeclarations: FunctionDeclaration[] = [
   },
 ];
 
-const greetingMessage: Message = {
-    id: crypto.randomUUID(),
-    text: "Hello, I am J.A.R.V.I.S. I am online and listening.",
-    sender: Sender.AI,
-    timestamp: new Date().toISOString()
+const createGreetingMessage = (name: string | null): Message => {
+    const greetingText = name 
+        ? `Hello, ${name}. I am Friday. I am online and listening.`
+        : "Hello, I am Friday. I am online and listening.";
+    return {
+        id: crypto.randomUUID(),
+        text: greetingText,
+        sender: Sender.AI,
+        timestamp: new Date().toISOString()
+    };
 };
 
-export const useJarvis = () => {
+export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     const [messages, setMessages] = useState<Message[]>(() => {
         try {
             const saved = localStorage.getItem(LOCAL_STORAGE_MESSAGES_KEY);
-            return saved ? JSON.parse(saved) : [greetingMessage];
-        } catch { return [greetingMessage]; }
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed.length > 0) return parsed;
+            }
+            return [createGreetingMessage(userName)];
+        } catch { return [createGreetingMessage(userName)]; }
     });
     const [tasks, setTasks] = useState<Task[]>(() => {
         try {
@@ -144,7 +153,7 @@ export const useJarvis = () => {
     const currentInputTranscriptionRef = useRef('');
     const currentOutputTranscriptionRef = useRef('');
 
-    const initializeOutputAudio = useCallback(() => {
+    const initializeOutputAudio = useCallback(async () => {
         if (outputAudioContextRef.current && outputAudioContextRef.current.state === 'running') {
             return true;
         }
@@ -154,7 +163,7 @@ export const useJarvis = () => {
                 : new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
 
             if (ctx.state === 'suspended') {
-                ctx.resume();
+                await ctx.resume();
             }
 
             if (!outputGainNodeRef.current || !outputAnalyserRef.current) {
@@ -196,10 +205,52 @@ export const useJarvis = () => {
         }
     }, []);
 
+    const speakText = useCallback(async (text: string) => {
+        if (!geminiServiceRef.current) return;
+
+        const audioInitialized = await initializeOutputAudio();
+        if (!audioInitialized) {
+            console.error("Audio could not be initialized for speaking.");
+            return;
+        }
+
+        try {
+            if (outputAudioContextRef.current?.state === 'suspended') {
+                await outputAudioContextRef.current.resume();
+            }
+
+            const audioBufferData = await geminiServiceRef.current.textToSpeech(text);
+            if (outputAudioContextRef.current && outputGainNodeRef.current) {
+                const audioBuffer = await decodeAudioData(
+                    new Uint8Array(audioBufferData),
+                    outputAudioContextRef.current,
+                    24000,
+                    1
+                );
+                const source = outputAudioContextRef.current.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(outputGainNodeRef.current);
+                source.start();
+                setIsSpeaking(true);
+
+                const sourceSet = audioSourcesRef.current;
+                sourceSet.add(source);
+                source.addEventListener('ended', () => {
+                    sourceSet.delete(source);
+                    if (sourceSet.size === 0) {
+                        setIsSpeaking(false);
+                    }
+                });
+            }
+        } catch (e) {
+            console.error("Error during TTS:", e);
+        }
+    }, [initializeOutputAudio]);
+
     useEffect(() => {
         const apiKey = process.env.API_KEY;
         if (!apiKey) {
-            setError('J.A.R.V.I.S. is offline. The API_KEY environment variable is not configured.');
+            setError('Friday is offline. The API_KEY environment variable is not configured.');
             return;
         }
         try {
@@ -213,6 +264,17 @@ export const useJarvis = () => {
             setError('Failed to initialize AI services.');
         }
     }, []);
+    
+    // This effect speaks the greeting message once the user's name is known AND the user has
+    // interacted with the page to allow audio playback.
+    useEffect(() => {
+        const saved = localStorage.getItem(LOCAL_STORAGE_MESSAGES_KEY);
+        if ((!saved || JSON.parse(saved).length <= 1) && userName && isAudioReady) {
+            const greetingMessage = createGreetingMessage(userName);
+            setMessages([greetingMessage]);
+            speakText(greetingMessage.text);
+        }
+    }, [userName, isAudioReady, speakText]);
 
     useEffect(() => {
         localStorage.setItem(LOCAL_STORAGE_MESSAGES_KEY, JSON.stringify(messages));
@@ -315,7 +377,7 @@ export const useJarvis = () => {
     const startSession = useCallback(async () => {
         if (!aiRef.current || sessionPromiseRef.current || isSessionActive) return;
         
-        initializeOutputAudio();
+        await initializeOutputAudio();
 
         try {
             mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -344,7 +406,7 @@ export const useJarvis = () => {
                 config: {
                     responseModalities: [Modality.AUDIO],
                     speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
-                    systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise unless asked for detail. You can generate images and search the web.',
+                    systemInstruction: `You are Friday, a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise unless asked for detail. The user's name is ${userName || 'Sir/Ma\'am'}. Address them by their name when appropriate. You can generate images and search the web.`,
                     inputAudioTranscription: {},
                     outputAudioTranscription: {},
                     tools: [{ functionDeclarations }],
@@ -410,12 +472,12 @@ export const useJarvis = () => {
                         }
                     },
                     onerror: (e: ErrorEvent) => {
-                        console.error('J.A.R.V.I.S. session error:', e);
+                        console.error('Friday session error:', e);
                         setError('A session error occurred. Please restart.');
                         stopSession();
                     },
                     onclose: () => {
-                        console.log('J.A.R.V.I.S. session closed.');
+                        console.log('Friday session closed.');
                         stopSession();
                     },
                 }
@@ -424,50 +486,33 @@ export const useJarvis = () => {
             console.error("Failed to start session:", e);
             setError(`Failed to start session: ${(e as Error).message}. Check microphone permissions.`);
         }
-    }, [isSessionActive, addMessage, updateLastMessage, executeToolCall, stopSession, initializeOutputAudio]);
+    }, [isSessionActive, addMessage, updateLastMessage, executeToolCall, stopSession, initializeOutputAudio, userName]);
 
     const sendTextMessage = useCallback(async (message: string) => {
         if (!geminiServiceRef.current) return;
         addMessage({ text: message, sender: Sender.User });
         setIsThinkingText(true);
 
-        initializeOutputAudio();
-
         try {
             const response = await geminiServiceRef.current.generateText(message, false);
             const responseText = response.text;
             addMessage({ text: responseText, sender: Sender.AI });
-            
-            const audioBufferData = await geminiServiceRef.current.textToSpeech(responseText);
-            if (outputAudioContextRef.current && outputGainNodeRef.current) {
-                const audioBuffer = await decodeAudioData(
-                    new Uint8Array(audioBufferData),
-                    outputAudioContextRef.current,
-                    24000,
-                    1
-                );
-                const source = outputAudioContextRef.current.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(outputGainNodeRef.current);
-                source.start();
-                setIsSpeaking(true);
-                source.onended = () => setIsSpeaking(false);
-            }
+            await speakText(responseText);
         } catch (e) {
             console.error("Error in text chat:", e);
             addMessage({ text: "My apologies, I encountered an error.", sender: Sender.System });
         } finally {
             setIsThinkingText(false);
         }
-    }, [addMessage, initializeOutputAudio]);
+    }, [addMessage, speakText]);
 
 
     const clearSession = useCallback(() => {
-        setMessages([greetingMessage]);
+        setMessages([createGreetingMessage(userName)]);
         setTasks([]);
         localStorage.removeItem(LOCAL_STORAGE_MESSAGES_KEY);
         localStorage.removeItem(LOCAL_STORAGE_TASKS_KEY);
-    }, []);
+    }, [userName]);
 
     const restartSession = useCallback(async () => {
         await stopSession();
@@ -478,6 +523,6 @@ export const useJarvis = () => {
     return {
         messages, isSessionActive, isThinking, isProcessing, isSpeaking, micVolume, outputVolume, error,
         clearSession, restartSession, sendTextMessage, isThinkingText, startSession, stopSession,
-        geminiService: geminiServiceRef.current, hasVeoApiKey, addMessage
+        geminiService: geminiServiceRef.current, hasVeoApiKey, addMessage, initializeOutputAudio
     };
 };

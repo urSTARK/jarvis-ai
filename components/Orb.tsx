@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 
 interface OrbProps {
@@ -124,26 +123,26 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
       
       let targetAmplitude = 0;
       // Define a base rotation speed that changes based on the state.
-      let baseRotationSpeed = 1.0; // Increased default idle/listening speed for visibility
+      let baseRotationSpeed = 1.0; // Default idle speed
 
       // The order of these checks is critical for correct state display.
       if (isSpeaking) {
         targetAmplitude = Math.min(outputVolume * 200, 100);
-        baseRotationSpeed = 1.2; 
+        baseRotationSpeed = 2.5; // Significantly faster when speaking
       } else if (isProcessing) {
         // Use a subtle pulsing effect for processing
         const pulse = (Math.sin(timeInSeconds * 2.5) + 1) / 2;
         targetAmplitude = 5 + (pulse * 10);
-        baseRotationSpeed = 1.4;
+        baseRotationSpeed = 2.0;
       } else if (isThinking) {
         // Create a slow, deep "breathing" effect
         const pulse = (Math.sin(timeInSeconds * 1.5) + 1) / 2;
         targetAmplitude = 10 + (pulse * 15);
-        baseRotationSpeed = 1.6;
+        baseRotationSpeed = 2.2;
       } else if (isListening) {
         // User stated this sensitivity is perfect.
         targetAmplitude = Math.min(micVolume * 400, 100);
-        // Uses the default baseRotationSpeed
+        baseRotationSpeed = 2.0; // Faster when listening
       }
       
       // Increase smoothing factor for a faster, more responsive feel.
@@ -244,11 +243,11 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
       </svg>
 
       <div className="relative z-10 flex flex-col items-center justify-center">
-        <h1 className="text-3xl md:text-4xl font-light tracking-widest transition-all duration-300" style={{ textShadow: `0 0 10px ${currentColor}` }}>
-          J.A.R.V.I.S.
+        <h1 className="text-xl md:text-2xl font-light tracking-widest transition-all duration-300" style={{ textShadow: `0 0 10px ${currentColor}` }}>
+          FRIDAY
         </h1>
         <div className="px-4 py-1 mt-2">
-            <p className="text-base md:text-lg opacity-80 tracking-widest">{getStatusText()}</p>
+            <p className="text-[10px] md:text-xs opacity-80 tracking-widest">{getStatusText()}</p>
         </div>
       </div>
     </div>
