@@ -24,7 +24,7 @@ export class GeminiService {
   // Text generation for chat
   async generateText(prompt: string, useThinkingMode: boolean = false): Promise<GenerateContentResponse> {
     const model = useThinkingMode ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
-    const config = useThinkingMode ? { thinkingConfig: { thinkingBudget: 32768 } } : {};
+    const config = useThinkingMode ? { thinkingConfig: { thinkingBudget: 32768 } } : { thinkingConfig: { thinkingBudget: 0 } };
     
     return this.ai.models.generateContent({
         model,
@@ -36,7 +36,7 @@ export class GeminiService {
   // Streaming text generation for chat
   async generateTextStream(prompt: string, useThinkingMode: boolean = false): Promise<AsyncGenerator<GenerateContentResponse>> {
     const model = useThinkingMode ? 'gemini-2.5-pro' : 'gemini-2.5-flash';
-    const config = useThinkingMode ? { thinkingConfig: { thinkingBudget: 32768 } } : {};
+    const config = useThinkingMode ? { thinkingConfig: { thinkingBudget: 32768 } } : { thinkingConfig: { thinkingBudget: 0 } };
     
     return this.ai.models.generateContentStream({
         model,
@@ -78,19 +78,22 @@ export class GeminiService {
   }
 
   // Image Generation
-  async generateImage(prompt: string, aspectRatio: '1:1' | '16:9' | '9:16' | '4:3' | '3:4'): Promise<string> {
-      const response = await this.ai.models.generateImages({
-          model: 'imagen-4.0-generate-001',
-          prompt: prompt,
-          config: {
-              numberOfImages: 1,
-              outputMimeType: 'image/jpeg',
-              aspectRatio: aspectRatio,
-          },
-      });
+  async generateImage(prompt: string): Promise<string> {
+    const response = await this.ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: { parts: [{ text: prompt }] },
+        config: {
+            responseModalities: [Modality.IMAGE],
+        },
+    });
 
-      const base64ImageBytes: string = response.generatedImages[0].image.imageBytes;
-      return `data:image/jpeg;base64,${base64ImageBytes}`;
+    for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+            const base64ImageBytes: string = part.inlineData.data;
+            return `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
+        }
+    }
+    throw new Error("No image generated.");
   }
 
   // Image Editing

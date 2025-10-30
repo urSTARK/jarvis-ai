@@ -6,6 +6,8 @@ interface OrbProps {
   isProcessing: boolean;
   isSpeaking: boolean;
   isShutdown: boolean;
+  isShuttingDown: boolean;
+  isWakingUp: boolean;
   micVolume: number;
   outputVolume: number;
 }
@@ -40,6 +42,8 @@ const COLORS = {
   PROCESSING: 'rgb(255, 165, 0)',     // #FFA500 - Orange
   DEFAULT: 'rgb(255, 58, 58)',        // #FF3A3A for default/idle state
   SHUTDOWN: 'rgb(139, 0, 0)',         // #8B0000 - DarkRed for standby
+  WAKING_UP: 'rgb(0, 255, 255)',      // Cyan for waking up
+  SHUTTING_DOWN: 'rgb(255, 69, 0)',   // OrangeRed for shutting down
 };
 
 const ringConfig = [
@@ -52,7 +56,7 @@ const ringConfig = [
 ];
 
 
-const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume }) => {
+const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpeaking, isShutdown, isShuttingDown, isWakingUp, micVolume, outputVolume }) => {
   const pathRefs = useRef<(SVGPathElement | null)[]>([]);
   const animationFrameRef = useRef<number | null>(null);
   const smoothedVolumeRef = useRef(0);
@@ -69,13 +73,17 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
         navigator.vibrate(50);
       }
     }
-  }, [isListening, isThinking, isProcessing, isSpeaking, isShutdown]);
+  }, [isListening, isThinking, isProcessing, isSpeaking, isShutdown, isShuttingDown, isWakingUp]);
   
   // Determine current color based on state
   useEffect(() => {
-    let color = COLORS.DEFAULT; // Start with the default red.
+    let color = COLORS.DEFAULT;
 
-    if (isShutdown) {
+    if (isWakingUp) {
+        color = COLORS.WAKING_UP;
+    } else if (isShuttingDown) {
+        color = COLORS.SHUTTING_DOWN;
+    } else if (isShutdown) {
         color = COLORS.SHUTDOWN;
     } else if (isProcessing) {
       color = COLORS.PROCESSING;
@@ -101,10 +109,12 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
       }
     }
     setCurrentColor(color);
-  }, [isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume]);
+  }, [isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, isShuttingDown, isWakingUp]);
 
 
   const getStatusText = () => {
+    if (isWakingUp) return "Waking Up...";
+    if (isShuttingDown) return "Shutting Down...";
     if (isShutdown) return "Standby";
     if (isProcessing) return "Processing...";
     if (isSpeaking) return "Answering...";
@@ -113,50 +123,73 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
     return "Online";
   };
   
-  // Keep a ref to the latest props to avoid re-running the effect on every frame.
-  const latestProps = useRef({ isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume });
+  const latestProps = useRef({ isListening, isThinking, isProcessing, isSpeaking, isShutdown, isShuttingDown, isWakingUp, micVolume, outputVolume });
   useEffect(() => {
-    latestProps.current = { isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume };
+    latestProps.current = { isListening, isThinking, isProcessing, isSpeaking, isShutdown, isShuttingDown, isWakingUp, micVolume, outputVolume };
   });
 
+  const transitionStartTime = useRef(0);
+  const prevProps = useRef({ isWakingUp, isShuttingDown });
+
+  useEffect(() => {
+    const { isWakingUp: nowWakingUp, isShuttingDown: nowShuttingDown } = latestProps.current;
+    const { isWakingUp: wasWakingUp, isShuttingDown: wasShuttingDown } = prevProps.current;
+
+    if ((nowWakingUp && !wasWakingUp) || (nowShuttingDown && !wasShuttingDown)) {
+      transitionStartTime.current = Date.now();
+    }
+    prevProps.current = { isWakingUp: nowWakingUp, isShuttingDown: nowShuttingDown };
+  }, [isWakingUp, isShuttingDown]);
+  
   useEffect(() => {
     const animate = (time: number) => {
-      // Get the latest props from the ref inside the animation loop.
-      const { isListening, isThinking, isProcessing, isSpeaking, isShutdown, micVolume, outputVolume } = latestProps.current;
+      const { isListening, isThinking, isProcessing, isSpeaking, isShutdown, isWakingUp, isShuttingDown, micVolume, outputVolume } = latestProps.current;
       const timeInSeconds = time * 0.001;
       
       let targetAmplitude = 0;
-      let baseRotationSpeed = 1.0; // Default idle speed
+      let baseRotationSpeed = 1.0;
 
-      if (isShutdown) {
-        const pulse = (Math.sin(timeInSeconds * 0.7) + 1) / 2; // Slow pulse
+      const standbyAmplitude = 3;
+      const standbyRotation = 0.2;
+      const onlineAmplitude = 0;
+      const onlineRotation = 1.0;
+
+      if (isShuttingDown) {
+        const duration = 800;
+        const progress = Math.min((Date.now() - transitionStartTime.current) / duration, 1);
+        targetAmplitude = onlineAmplitude + (standbyAmplitude - onlineAmplitude) * progress;
+        baseRotationSpeed = onlineRotation + (standbyRotation - onlineRotation) * progress;
+      } else if (isWakingUp) {
+        const duration = 1200;
+        const progress = Math.min((Date.now() - transitionStartTime.current) / duration, 1);
+        const pulse = Math.sin(progress * Math.PI) * 40;
+        targetAmplitude = standbyAmplitude + (onlineAmplitude - standbyAmplitude) * progress + pulse;
+        baseRotationSpeed = standbyRotation + (onlineRotation - standbyRotation) * progress;
+      } else if (isShutdown) {
+        const pulse = (Math.sin(timeInSeconds * 0.7) + 1) / 2;
         targetAmplitude = 2 + (pulse * 2);
-        baseRotationSpeed = 0.2; // Very slow rotation
+        baseRotationSpeed = 0.2;
       } else if (isSpeaking) {
         targetAmplitude = Math.min(outputVolume * 200, 100);
-        baseRotationSpeed = 2.5; // Significantly faster when speaking
+        baseRotationSpeed = 2.5;
       } else if (isProcessing) {
-        // Use a subtle pulsing effect for processing
-        const pulse = (Math.sin(timeInSeconds * 2.5) + 1) / 2;
-        targetAmplitude = 5 + (pulse * 10);
-        baseRotationSpeed = 2.0;
+        const pulse = (Math.sin(timeInSeconds * 5) + 1) / 2; // Faster pulse
+        targetAmplitude = 15 + (pulse * 25); // More intense amplitude
+        baseRotationSpeed = 3.0; // Faster rotation
       } else if (isThinking) {
-        // Create a slow, deep "breathing" effect
         const pulse = (Math.sin(timeInSeconds * 1.5) + 1) / 2;
         targetAmplitude = 10 + (pulse * 15);
         baseRotationSpeed = 2.2;
       } else if (isListening) {
-        // User stated this sensitivity is perfect.
         targetAmplitude = Math.min(micVolume * 400, 100);
-        baseRotationSpeed = 2.0; // Faster when listening
+        baseRotationSpeed = 2.0;
       }
       
-      // Increase smoothing factor for a faster, more responsive feel.
       smoothedVolumeRef.current += (targetAmplitude - smoothedVolumeRef.current) * 0.25;
 
       const points = 120;
-      const centerX = 200;
-      const centerY = 200;
+      const centerX = 300;
+      const centerY = 300;
       
       const fluidRotationFactor = 1 + Math.sin(timeInSeconds * 0.5) * 0.2;
       const expansionPulse = isShutdown ? 0 : Math.sin(timeInSeconds * 1.5) * 6;
@@ -208,9 +241,9 @@ const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpea
   }, []); // Empty dependency array means this effect runs only once on mount.
 
   return (
-    <div className="relative w-full h-80 flex items-center justify-center flex-shrink-0 text-white font-sans text-center">
+    <div className="relative w-[480px] h-[480px] flex items-center justify-center flex-shrink-0 text-white font-sans text-center">
       <svg
-        viewBox="0 0 400 400"
+        viewBox="0 0 600 600"
         className="absolute w-full h-full transition-all duration-300"
         style={{ filter: `drop-shadow(0 0 ${isShutdown ? 15 : 35}px ${currentColor}) drop-shadow(0 0 ${isShutdown ? 5 : 10}px ${currentColor})` }}
       >

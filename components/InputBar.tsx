@@ -23,7 +23,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isListening, onToggl
   const micButtonHandler = isShutdown ? onWakeUp : onToggleListen;
   
   return (
-    <div className="p-4 bg-neutral-900/50 backdrop-blur-sm border-t border-neutral-700/50">
+    <div className="p-4 bg-transparent">
       <form onSubmit={handleSubmit} className="flex items-center space-x-4">
         <div className="relative flex-1">
           <input
@@ -32,7 +32,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isListening, onToggl
             onChange={(e) => setInputValue(e.target.value)}
             placeholder={isShutdown ? "Friday is in standby..." : "Type your command or just talk to me..."}
             disabled={isThinking || isListening || isShutdown}
-            className="w-full bg-neutral-800/80 border border-neutral-600 rounded-full py-3 px-6 text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-red-500 transition-shadow duration-300 disabled:opacity-60"
+            className="w-full bg-neutral-900/30 border border-neutral-600 rounded-full py-3 px-6 text-white placeholder-neutral-400 focus:outline-none focus:ring-2 focus:ring-red-500 transition-shadow duration-300 disabled:opacity-60"
           />
         </div>
         <button

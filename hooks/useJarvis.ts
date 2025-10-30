@@ -1,12 +1,51 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration, Blob, FunctionCall } from "@google/genai";
-import type { Message, Task } from '../types';
-import { Sender, TaskStatus } from '../types';
+import type { Message } from '../types';
+import { Sender } from '../types';
 import { GeminiService } from '../services/geminiService';
 
 // --- Constants for localStorage keys ---
 const LOCAL_STORAGE_MESSAGES_KEY = 'friday-messages';
-const LOCAL_STORAGE_TASKS_KEY = 'friday-tasks';
+
+// --- Local Command Constants ---
+const SHUTDOWN_COMMANDS = [
+  'shutdown', 'shut down', 'set down', 'go to sleep', 'sleep mode',
+  'sleep friday', 'friday sleep', 'turn off', 'go offline', 'shut up',
+  'standby', 'power down', 'disengage', 'go to standby', 'enter standby',
+  'that\'s enough for now', 'we\'re done for today', 'take a break', 'go on standby',
+  'power off', 'that will be all', 'dismissed', 'end program', 'deactivate',
+  'quiet mode', 'be quiet', 'mute yourself', 'that\'s all', 'i\'m done'
+];
+
+const OWNER_COMMANDS = [
+  'who is your owner', 'who made you', 'your owner', 'who created you', 'your creator',
+  'contact your owner', 'contact your creator', 'made by who', 'who is stark',
+  'who is your honor', // Handle speech recognition inaccuracy
+  'who is your honour', // Alternate spelling
+  'who\'s your owner', // Handle contractions
+  'who\'s your creator', // Handle contractions
+  'who designed you',
+  'who built you',
+  'who is your maker',
+  'your maker',
+  'who are your creators',
+  'tell me about your creator'
+];
+
+const SIMPLE_COMMANDS: Record<string, string> = {
+  'hello': 'Hello! How can I assist you?',
+  'hi': 'Hi there! What can I do for you today?',
+  'hey': 'Hey! How can I help?',
+  'how are you': "I'm operating at peak efficiency. Thanks for asking!",
+  'whats your name': "I'm Friday, your personal AI assistant.",
+  'who are you': "I'm Friday, an AI assistant inspired by the one from Iron Man.",
+};
+
+// --- Result type for local command processing ---
+interface LocalCommandResult {
+    handled: boolean;
+    responseText?: string;
+}
 
 // --- Helper functions for audio processing ---
 function decode(base64: string): Uint8Array {
@@ -83,26 +122,7 @@ const functionDeclarations: FunctionDeclaration[] = [
       required: ['query'],
     },
   },
-  {
-    name: 'generateImage',
-    parameters: {
-      type: Type.OBJECT,
-      description: 'Generates an image based on a textual description.',
-      properties: {
-        prompt: { type: Type.STRING, description: 'A detailed description of the image to generate.' },
-        aspectRatio: { type: Type.STRING, description: 'The aspect ratio. Supported: "1:1", "16:9", "9:16", "4:3", "3:4".' },
-      },
-      required: ['prompt'],
-    },
-  },
-  {
-    name: 'shutdownAssistant',
-    parameters: {
-      type: Type.OBJECT,
-      description: 'Puts the assistant into a low-power standby mode. The assistant will stop listening for general commands and only listen for a wake word to reactivate.',
-      properties: {},
-    },
-  },
+  // Note: shutdownAssistant is removed and handled locally client-side for immediate response.
 ];
 
 const createGreetingMessage = (name: string | null): Message => {
@@ -128,18 +148,14 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
             return [createGreetingMessage(userName)];
         } catch { return [createGreetingMessage(userName)]; }
     });
-    const [tasks, setTasks] = useState<Task[]>(() => {
-        try {
-            const saved = localStorage.getItem(LOCAL_STORAGE_TASKS_KEY);
-            return saved ? JSON.parse(saved) : [];
-        } catch { return []; }
-    });
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isThinking, setIsThinking] = useState(false);
     const [isThinkingText, setIsThinkingText] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [isShutdown, setIsShutdown] = useState(false);
+    const [isShuttingDown, setIsShuttingDown] = useState(false);
+    const [isWakingUp, setIsWakingUp] = useState(false);
     const [micVolume, setMicVolume] = useState(0);
     const [outputVolume, setOutputVolume] = useState(0);
     const [error, setError] = useState<string | null>(null);
@@ -215,6 +231,38 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         }
     }, []);
 
+    const playSoundEffect = useCallback(async (type: 'power-up' | 'power-down') => {
+        const audioInitialized = await initializeOutputAudio();
+        if (!audioInitialized || !outputAudioContextRef.current || !outputGainNodeRef.current) return;
+
+        const ctx = outputAudioContextRef.current;
+        const gainNode = outputGainNodeRef.current;
+        const oscillator = ctx.createOscillator();
+        const effectGain = ctx.createGain();
+        oscillator.connect(effectGain);
+        effectGain.connect(gainNode);
+
+        const now = ctx.currentTime;
+        oscillator.type = 'sine';
+        
+        if (type === 'power-down') {
+            oscillator.frequency.setValueAtTime(250, now);
+            oscillator.frequency.exponentialRampToValueAtTime(50, now + 0.5);
+            effectGain.gain.setValueAtTime(0.3, now);
+            effectGain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+            oscillator.start(now);
+            oscillator.stop(now + 0.5);
+        } else { // power-up
+            oscillator.frequency.setValueAtTime(100, now);
+            oscillator.frequency.exponentialRampToValueAtTime(400, now + 0.8);
+            effectGain.gain.setValueAtTime(0.001, now);
+            effectGain.gain.linearRampToValueAtTime(0.4, now + 0.2);
+            effectGain.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+            oscillator.start(now);
+            oscillator.stop(now + 0.8);
+        }
+    }, [initializeOutputAudio]);
+
     const speakText = useCallback(async (text: string) => {
         if (!geminiServiceRef.current) return;
 
@@ -288,23 +336,8 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         localStorage.setItem(LOCAL_STORAGE_MESSAGES_KEY, JSON.stringify(messages));
     }, [messages]);
 
-    useEffect(() => {
-        localStorage.setItem(LOCAL_STORAGE_TASKS_KEY, JSON.stringify(tasks));
-    }, [tasks]);
-
-    const addNewTask = useCallback((description: string): Task => {
-        const newTask: Task = {
-            id: crypto.randomUUID(), description, status: TaskStatus.InProgress, startTime: new Date().toISOString(),
-        };
-        setTasks(prev => [newTask, ...prev.slice(0, 9)]);
-        return newTask;
-    }, []);
-    
-    const updateTask = useCallback((id: string, status: TaskStatus, result?: string) => {
-        setTasks(prev => prev.map(t => t.id === id ? { ...t, status, result } : t));
-    }, []);
-    
     const addMessage = useCallback((message: Omit<Message, 'id' | 'timestamp'>) => {
+        // Fix: Changed 'new new Date()' to 'new Date()'
         setMessages(prev => [...prev.filter(m => !m.isPartial), { ...message, id: crypto.randomUUID(), timestamp: new Date().toISOString() }]);
     }, []);
 
@@ -319,19 +352,86 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         });
     }, []);
     
+    const stopSession = useCallback(async () => {
+        if (sessionPromiseRef.current) {
+            try {
+                const session = await sessionPromiseRef.current;
+                session.close();
+            } catch (e) {
+                console.warn("Error closing session, it might have been closed already.", e);
+            } finally {
+                sessionPromiseRef.current = null;
+            }
+        }
+        if (inputAnimationRef.current) cancelAnimationFrame(inputAnimationRef.current);
+        scriptProcessorRef.current?.disconnect();
+        if (inputAudioContextRef.current?.state !== 'closed') {
+             inputAudioContextRef.current?.close().then(() => {
+                inputAudioContextRef.current = null;
+             });
+        }
+        audioSourcesRef.current.forEach(source => source.stop());
+        audioSourcesRef.current.clear();
+        setIsSessionActive(false);
+        setMicVolume(0);
+    }, []);
+    
+    const shutdown = useCallback(() => {
+        if (isShutdown || isShuttingDown) return;
+        
+        // Stop any AI speech and clear all active states immediately
+        audioSourcesRef.current.forEach(source => source.stop());
+        audioSourcesRef.current.clear();
+        setIsSpeaking(false);
+        setIsThinking(false);
+        setIsThinkingText(false);
+        setIsProcessing(false);
+
+        // Clear any partial transcriptions or messages
+        currentInputTranscriptionRef.current = '';
+        currentOutputTranscriptionRef.current = '';
+        setMessages(prev => prev.filter(m => !m.isPartial));
+        
+        stopSession();
+        playSoundEffect('power-down');
+        setIsShuttingDown(true);
+
+        setTimeout(() => {
+            setIsShutdown(true);
+            setIsShuttingDown(false);
+        }, 800);
+    }, [isShutdown, isShuttingDown, stopSession, playSoundEffect]);
+    
+    const processLocalCommand = useCallback((command: string): LocalCommandResult => {
+        const sanitizedCommand = command.toLowerCase().trim().replace(/[.,!?]/g, '');
+        
+        const isOwnerCommand = OWNER_COMMANDS.some(cmd => sanitizedCommand.includes(cmd));
+        if (isOwnerCommand) {
+            const ownerResponse = "I am Friday, a sophisticated AI assistant. I was designed and created by Stark. If you wish to contact my creator, you can reach him here: https://t.me/urstarkz";
+            return { handled: true, responseText: ownerResponse };
+        }
+
+        const isShutdownCommand = SHUTDOWN_COMMANDS.some(cmd => sanitizedCommand.includes(cmd));
+        if (isShutdownCommand) {
+            shutdown();
+            return { handled: true };
+        }
+
+        const simpleResponse = SIMPLE_COMMANDS[sanitizedCommand];
+        if (simpleResponse) {
+            return { handled: true, responseText: simpleResponse };
+        }
+
+        return { handled: false };
+    }, [shutdown]);
+
     const executeToolCall = useCallback(async (fc: FunctionCall) => {
         if (!geminiServiceRef.current) return { status: 'ERROR', message: 'Gemini service not initialized.' };
-        const task = addNewTask(`Executing: ${fc.name}`);
         setIsProcessing(true);
         let responseTextForSession = 'Task completed successfully.';
 
         try {
             switch (fc.name) {
-                case 'shutdownAssistant':
-                    setIsShutdown(true);
-                    responseTextForSession = ''; // Make shutdown silent
-                    updateTask(task.id, TaskStatus.Completed, 'Shutdown command received.');
-                    break;
                 case 'searchWeb': {
                     const { query } = fc.args;
                     const response = await geminiServiceRef.current.groundedSearch(query as string);
@@ -350,68 +450,40 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                     addMessage({ text: responseTextForSession, sender: Sender.AI, sources });
                     break;
                 }
-                case 'generateImage': {
-                    const { prompt, aspectRatio } = fc.args;
-                    const imageUrl = await geminiServiceRef.current.generateImage(prompt as string, (aspectRatio || '1:1') as any);
-                    responseTextForSession = `I've generated the image as requested. I've added it to the Toolbelt for viewing.`;
-                    addMessage({ text: `${responseTextForSession}\n[View Image](${imageUrl})`, sender: Sender.AI });
-                    break;
-                }
+                default:
+                    responseTextForSession = `I'm sorry, I don't know how to do that.`;
             }
-            updateTask(task.id, TaskStatus.Completed, responseTextForSession);
         } catch (e) {
             console.error(`Error executing tool ${fc.name}:`, e);
             responseTextForSession = `I failed to execute the task: ${(e as Error).message}`;
-            updateTask(task.id, TaskStatus.Failed, (e as Error).message);
         } finally {
             setIsProcessing(false);
         }
 
         return { result: { message: responseTextForSession }};
-    }, [addNewTask, updateTask, addMessage, setIsShutdown]);
-
-    const stopSession = useCallback(async () => {
-        if (sessionPromiseRef.current) {
-            try {
-                const session = await sessionPromiseRef.current;
-                session.close();
-            } catch (e) {
-                console.warn("Error closing session, it might have been closed already.", e);
-            } finally {
-                sessionPromiseRef.current = null;
-            }
-        }
-        if (inputAnimationRef.current) cancelAnimationFrame(inputAnimationRef.current);
-        scriptProcessorRef.current?.disconnect();
-        // Do NOT stop mediaStream tracks here, so the wake word listener can use it.
-        // Close the input audio context to stop processing for the live session.
-        if (inputAudioContextRef.current?.state !== 'closed') {
-             inputAudioContextRef.current?.close().then(() => {
-                inputAudioContextRef.current = null;
-             });
-        }
-        audioSourcesRef.current.forEach(source => source.stop());
-        audioSourcesRef.current.clear();
-        setIsSessionActive(false);
-        setMicVolume(0);
-    }, []);
+    }, [addMessage]);
 
     const sendTextMessage = useCallback(async (message: string) => {
-        if (!geminiServiceRef.current || isShutdown || !message.trim()) return;
+        if (isShutdown || isShuttingDown || !message.trim()) return;
+        
         addMessage({ text: message, sender: Sender.User });
 
-        // Directly handle shutdown command to ensure reliability and silence
-        if (message.toLowerCase().includes('shutdown')) {
-            setIsShutdown(true);
+        const localCommand = processLocalCommand(message);
+        if (localCommand.handled) {
+            if (localCommand.responseText) {
+                addMessage({ text: localCommand.responseText, sender: Sender.AI });
+                speakText(localCommand.responseText);
+            }
             return;
         }
 
+        if (!geminiServiceRef.current) return;
+        
         setIsThinkingText(true);
 
         try {
             const stream = await geminiServiceRef.current.generateTextStream(message, false);
             let fullText = '';
-            // Start with an empty partial message so the bubble appears immediately
             updateLastMessage('', Sender.AI, true);
 
             for await (const chunk of stream) {
@@ -419,32 +491,32 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                 updateLastMessage(fullText, Sender.AI, true);
             }
             
-            // Finalize the message by updating it with isPartial: false
             updateLastMessage(fullText, Sender.AI, false);
             
-            // Speak the full response at the end
             if (fullText) {
                 await speakText(fullText);
             }
 
         } catch (e) {
             console.error("Error in text chat:", e);
-            const errorMessage = "My apologies, I encountered a communication error.";
-            // Finalize the message with an error, replacing any partial content
+            const error = e as Error;
+            let errorMessage = "My apologies, I encountered a communication error.";
+            if (error.message.includes('429') || error.message.toLowerCase().includes('quota')) {
+                errorMessage = "Usage limit reached. The free tier for this service has been exceeded. Please check your billing details on Google AI Studio or try again later.";
+            }
             updateLastMessage(errorMessage, Sender.System, false);
         } finally {
             setIsThinkingText(false);
         }
-    }, [addMessage, speakText, isShutdown, updateLastMessage, setIsShutdown]);
+    }, [addMessage, speakText, isShutdown, isShuttingDown, updateLastMessage, processLocalCommand]);
 
     const startSession = useCallback(async () => {
-        if (!aiRef.current || sessionPromiseRef.current || isSessionActive || isShutdown) return;
+        if (!aiRef.current || sessionPromiseRef.current || isSessionActive || isShutdown || isShuttingDown) return;
         
         await initializeOutputAudio();
         addMessage({ sender: Sender.System, text: "Activating live session..." });
 
         try {
-            // Reuse the media stream if it exists and is active, otherwise get a new one.
             if (!mediaStreamRef.current || mediaStreamRef.current.getAudioTracks().every(t => t.readyState === 'ended')) {
                 mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
             }
@@ -488,37 +560,52 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
                         };
                     },
                     onmessage: async (message: LiveServerMessage) => {
-                        if (message.serverContent?.inputTranscription) {
-                            currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
-                             // Immediate shutdown interception
-                            if (currentInputTranscriptionRef.current.toLowerCase().includes('shutdown')) {
-                                // Stop any speaking immediately
+                        if (message.serverContent?.turnComplete) {
+                            const finalInput = currentInputTranscriptionRef.current.trim();
+                            const finalOutput = currentOutputTranscriptionRef.current.trim();
+                            
+                            currentInputTranscriptionRef.current = '';
+                            currentOutputTranscriptionRef.current = '';
+
+                            const localCommand = processLocalCommand(finalInput);
+                            
+                            setMessages(prev => {
+                                const newMessages = prev.filter(m => !m.isPartial);
+                                if (finalInput) {
+                                    newMessages.push({ id: crypto.randomUUID(), text: finalInput, sender: Sender.User, timestamp: new Date().toISOString() });
+                                 }
+                                if (localCommand.handled) {
+                                    if (localCommand.responseText) {
+                                        newMessages.push({ id: crypto.randomUUID(), text: localCommand.responseText, sender: Sender.AI, timestamp: new Date().toISOString() });
+                                    }
+                                } else if (finalOutput) {
+                                    newMessages.push({ id: crypto.randomUUID(), text: finalOutput, sender: Sender.AI, timestamp: new Date().toISOString() });
+                                }
+                                return newMessages;
+                            });
+
+                            if (localCommand.handled) {
                                 audioSourcesRef.current.forEach(source => source.stop());
                                 audioSourcesRef.current.clear();
                                 setIsSpeaking(false);
-                                
-                                // Finalize the user's message and prevent it from being re-added
-                                updateLastMessage(currentInputTranscriptionRef.current.trim(), Sender.User, false);
-                                currentInputTranscriptionRef.current = '';
-                                
-                                // Trigger shutdown
-                                setIsShutdown(true); 
-                                return; // Exit message handler early
+                                if (localCommand.responseText) {
+                                    speakText(localCommand.responseText);
+                                }
                             }
+                            setIsThinking(false);
+                            return;
+                        }
+
+                        if (message.serverContent?.inputTranscription) {
+                            currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
                             updateLastMessage(currentInputTranscriptionRef.current, Sender.User, true);
-                        } else if (message.serverContent?.outputTranscription) {
+                        }
+                        
+                        if (message.serverContent?.outputTranscription) {
                             setIsThinking(false);
                             setIsSpeaking(true);
                             currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
                             updateLastMessage(currentOutputTranscriptionRef.current, Sender.AI, true);
-                        }
-
-                        if (message.serverContent?.turnComplete) {
-                            if (currentInputTranscriptionRef.current.trim()) addMessage({ text: currentInputTranscriptionRef.current.trim(), sender: Sender.User });
-                            if (currentOutputTranscriptionRef.current.trim()) addMessage({ text: currentOutputTranscriptionRef.current.trim(), sender: Sender.AI });
-                            currentInputTranscriptionRef.current = '';
-                            currentOutputTranscriptionRef.current = '';
-                            setIsThinking(false);
                         }
 
                         const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
@@ -564,47 +651,42 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
             console.error("Failed to start session:", e);
             setError(`Failed to start session: ${(e as Error).message}. Check microphone permissions.`);
         }
-    }, [isSessionActive, addMessage, updateLastMessage, executeToolCall, stopSession, initializeOutputAudio, userName, isShutdown]);
+    }, [isSessionActive, addMessage, updateLastMessage, executeToolCall, stopSession, initializeOutputAudio, userName, isShutdown, isShuttingDown, processLocalCommand, speakText]);
 
     const handleWakeUp = useCallback((command?: string) => {
         if (isShutdown) {
             if (command) {
                 initialCommandAfterWakeUpRef.current = command;
             }
+            setIsWakingUp(true);
             setIsShutdown(false);
-        }
-    }, [isShutdown]);
+            playSoundEffect('power-up');
+            speakText("Online.");
 
-    // Effect to process a command that was spoken along with the wake word.
+            setTimeout(() => {
+                setIsWakingUp(false);
+            }, 1200);
+        }
+    }, [isShutdown, playSoundEffect, speakText]);
+
     useEffect(() => {
-        // This effect runs when the system is not in shutdown mode.
-        if (!isShutdown) {
+        if (!isShutdown && !isWakingUp) {
             const commandToRun = initialCommandAfterWakeUpRef.current;
-            // If a command was captured during wake-up, process it.
             if (commandToRun) {
-                initialCommandAfterWakeUpRef.current = null; // Consume the command so it doesn't run again.
-                
-                // Directly handle shutdown command to ensure reliability
-                if (commandToRun.toLowerCase().includes('shutdown')) {
-                    setIsShutdown(true);
-                    addMessage({ sender: Sender.AI, text: "Acknowledged. Entering standby mode." });
-                } else {
-                    sendTextMessage(commandToRun);
-                }
+                initialCommandAfterWakeUpRef.current = null;
+                sendTextMessage(commandToRun);
             }
         }
-    }, [isShutdown, sendTextMessage, addMessage, setIsShutdown]);
+    }, [isShutdown, isWakingUp, sendTextMessage]);
 
-    // Effect to manage the main Gemini Live session based on operational state
     useEffect(() => {
-        if (!isShutdown && userName && isAudioReady && !isSessionActive) {
+        if (!isShutdown && !isShuttingDown && userName && isAudioReady && !isSessionActive) {
             startSession();
         } else if (isShutdown || !isAudioReady) {
             stopSession();
         }
-    }, [isShutdown, userName, isAudioReady, isSessionActive, startSession, stopSession]);
+    }, [isShutdown, isShuttingDown, userName, isAudioReady, isSessionActive, startSession, stopSession]);
     
-    // Effect to manage the lightweight wake-word listener
     useEffect(() => {
         if (!isShutdown) {
             if (wakeWordRecognizerRef.current) {
@@ -617,7 +699,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
             return;
         }
 
-        // isShutdown is true, start listener
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (!SpeechRecognition) {
             addMessage({ sender: Sender.System, text: "Wake word feature is not supported by your browser." });
@@ -635,12 +716,13 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         
         recognizer.onresult = (event: any) => {
             for (let i = event.resultIndex; i < event.results.length; ++i) {
-                const transcript = event.results[i][0].transcript.trim().toLowerCase();
-                if (transcript.includes('friday')) {
-                    const wakeWordIndex = transcript.indexOf('friday');
-                    const command = transcript.substring(wakeWordIndex + 'friday'.length).trim();
-                    handleWakeUp(command);
-                    return; // Stop processing once wake word is found
+                if (event.results[i].isFinal) {
+                    const transcript = event.results[i][0].transcript.trim().toLowerCase();
+                    if (transcript.startsWith('friday')) {
+                        const command = transcript.substring('friday'.length).trim();
+                        handleWakeUp(command);
+                        return;
+                    }
                 }
             }
         };
@@ -650,7 +732,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
              if (event.error === 'not-allowed') {
                 addMessage({ sender: Sender.System, text: "Microphone access denied. Wake word is disabled." });
                 if (wakeWordRecognizerRef.current) {
-                    wakeWordRecognizerRef.current.onend = null; // Prevent restart
+                    wakeWordRecognizerRef.current.onend = null;
                     wakeWordRecognizerRef.current.stop();
                     wakeWordRecognizerRef.current = null;
                 }
@@ -658,9 +740,12 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         };
 
         recognizer.onend = () => {
-            // Only restart if the ref still exists, meaning we haven't intentionally stopped it.
-            if (wakeWordRecognizerRef.current) {
-                recognizer.start();
+            if (wakeWordRecognizerRef.current && isShutdown) {
+                try {
+                  recognizer.start();
+                } catch(e) {
+                  console.warn("Could not restart wake word recognizer.", e);
+                }
             }
         };
 
@@ -676,7 +761,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         };
     }, [isShutdown, handleWakeUp, addMessage]);
 
-    // Final cleanup on component unmount
     useEffect(() => {
         return () => {
             stopSession();
@@ -693,13 +777,13 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
 
     const clearSession = useCallback(() => {
         setMessages([createGreetingMessage(userName)]);
-        setTasks([]);
         localStorage.removeItem(LOCAL_STORAGE_MESSAGES_KEY);
-        localStorage.removeItem(LOCAL_STORAGE_TASKS_KEY);
     }, [userName]);
 
     const restartSession = useCallback(async () => {
-        setIsShutdown(false); // Ensure we are not in shutdown state
+        setIsWakingUp(false);
+        setIsShuttingDown(false);
+        setIsShutdown(false);
         await stopSession();
         clearSession();
         setTimeout(startSession, 100);
@@ -709,6 +793,7 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
         messages, isSessionActive, isThinking, isProcessing, isSpeaking, micVolume, outputVolume, error,
         clearSession, restartSession, sendTextMessage, isThinkingText, startSession, stopSession,
         geminiService: geminiServiceRef.current, hasVeoApiKey, addMessage, initializeOutputAudio,
-        isShutdown, handleWakeUp,
+        shutdown,
+        isShutdown, handleWakeUp, isShuttingDown, isWakingUp,
     };
 };

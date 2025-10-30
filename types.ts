@@ -14,17 +14,17 @@ export interface Message {
   isPartial?: boolean;
 }
 
-// Fix: Add missing Task and TaskStatus types to resolve import errors.
+// Fix: Add TaskStatus enum for task components
 export enum TaskStatus {
   InProgress = 'in_progress',
   Completed = 'completed',
   Failed = 'failed',
 }
 
+// Fix: Add Task interface for task components
 export interface Task {
   id: string;
-  description: string;
   status: TaskStatus;
-  startTime: string;
+  description: string;
   result?: string;
 }

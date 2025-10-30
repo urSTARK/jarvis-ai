@@ -6,6 +6,28 @@ interface ChatWindowProps {
   messages: Message[];
 }
 
+const renderWithLinks = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+
+    return parts.map((part, index) => {
+        if (part.match(urlRegex)) {
+            return (
+                <a 
+                    key={index} 
+                    href={part} 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="text-red-400 hover:underline"
+                >
+                    {part}
+                </a>
+            );
+        }
+        return part;
+    });
+};
+
 const ChatWindow: React.FC<ChatWindowProps> = ({ messages }) => {
   const endOfMessagesRef = useRef<null | HTMLDivElement>(null);
 
@@ -16,8 +38,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages }) => {
   const MessageBubble: React.FC<{ message: Message }> = ({ message }) => {
     const isUser = message.sender === Sender.User;
     const bubbleClasses = isUser
-      ? 'bg-red-700 self-end rounded-br-none'
-      : 'bg-slate-800/40 border border-slate-700/50 self-start rounded-bl-none';
+      ? 'bg-red-900/30 border border-red-700/50 backdrop-blur-sm self-end rounded-br-none'
+      : 'bg-slate-900/30 border border-slate-700/50 backdrop-blur-sm self-start rounded-bl-none';
     
     const alignClasses = isUser ? 'items-end' : 'items-start';
     const partialClasses = message.isPartial ? 'opacity-70 italic' : '';
@@ -25,7 +47,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages }) => {
     return (
       <div className={`flex flex-col max-w-lg mx-2 my-2 ${alignClasses}`}>
         <div className={`px-4 py-3 rounded-2xl shadow-md ${bubbleClasses} ${partialClasses}`}>
-          <p className="text-white whitespace-pre-wrap">{message.text}</p>
+          <div className="text-white whitespace-pre-wrap">{renderWithLinks(message.text)}</div>
           {message.sources && message.sources.length > 0 && (
             <div className="mt-3 pt-2 border-t border-slate-600">
               <p className="text-xs text-slate-400 mb-1">Sources:</p>
@@ -49,7 +71,8 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages }) => {
   };
 
   return (
-    <div className="flex-1 p-4 overflow-y-auto custom-scrollbar flex flex-col">
+    <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col px-4 pb-4 pt-16 bg-transparent"
+         style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 25%, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 25%, black 100%)' }}>
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} />
       ))}
