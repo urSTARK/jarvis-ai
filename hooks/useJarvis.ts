@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration, Blob, FunctionCall } from "@google/genai";
 import type { Message, Task } from '../types';
 import { Sender, TaskStatus } from '../types';
+import { GeminiService } from '../services/geminiService';
 
 // --- Constants for localStorage keys ---
 const LOCAL_STORAGE_MESSAGES_KEY = 'jarvis-messages';
@@ -64,7 +65,7 @@ const functionDeclarations: FunctionDeclaration[] = [
     name: 'searchWeb',
     parameters: {
         type: Type.OBJECT,
-        description: 'Searches the web for real-time information on a given topic. Use for recent events, news, or any up-to-date information.',
+        description: 'Searches the web for real-time information. Use for recent events, news, or any up-to-date information that is not about places.',
         properties: {
             query: { type: Type.STRING, description: 'The search query.' },
         },
@@ -72,37 +73,28 @@ const functionDeclarations: FunctionDeclaration[] = [
     },
   },
   {
-    name: 'openUrl',
+    name: 'searchNearby',
     parameters: {
       type: Type.OBJECT,
-      description: 'Opens a given URL in a new browser tab.',
+      description: 'Finds nearby places using Google Maps. Use for questions about restaurants, stores, parks, etc., near the user.',
       properties: {
-        url: { type: Type.STRING, description: 'The fully qualified URL to open.' },
+        query: { type: Type.STRING, description: 'The type of place to search for. E.g., "pizza", "coffee shop".' },
       },
-      required: ['url'],
+      required: ['query'],
     },
   },
   {
-    name: 'setReminder',
+    name: 'generateImage',
     parameters: {
       type: Type.OBJECT,
-      description: 'Sets a reminder for the user.',
+      description: 'Generates an image based on a textual description.',
       properties: {
-        time: { type: Type.STRING, description: 'The time for the reminder in seconds from now. e.g., "10" for 10 seconds.' },
-        subject: { type: Type.STRING, description: 'The subject of the reminder.' },
+        prompt: { type: Type.STRING, description: 'A detailed description of the image to generate.' },
+        aspectRatio: { type: Type.STRING, description: 'The aspect ratio. Supported: "1:1", "16:9", "9:16", "4:3", "3:4".' },
       },
-      required: ['time', 'subject'],
+      required: ['prompt'],
     },
   },
-  {
-      name: 'getCurrentTime',
-      parameters: {
-          type: Type.OBJECT,
-          description: "Gets the current time.",
-          properties: {},
-          required: []
-      }
-  }
 ];
 
 const greetingMessage: Message = {
@@ -116,34 +108,27 @@ export const useJarvis = () => {
     const [messages, setMessages] = useState<Message[]>(() => {
         try {
             const saved = localStorage.getItem(LOCAL_STORAGE_MESSAGES_KEY);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                return Array.isArray(parsed) && parsed.length > 0 ? parsed : [greetingMessage];
-            }
-            return [greetingMessage];
-        } catch (error) {
-            console.error("Failed to parse messages from localStorage", error);
-            return [greetingMessage];
-        }
+            return saved ? JSON.parse(saved) : [greetingMessage];
+        } catch { return [greetingMessage]; }
     });
     const [tasks, setTasks] = useState<Task[]>(() => {
         try {
             const saved = localStorage.getItem(LOCAL_STORAGE_TASKS_KEY);
             return saved ? JSON.parse(saved) : [];
-        } catch (error) {
-            console.error("Failed to parse tasks from localStorage", error);
-            return [];
-        }
+        } catch { return []; }
     });
     const [isSessionActive, setIsSessionActive] = useState(false);
     const [isThinking, setIsThinking] = useState(false);
+    const [isThinkingText, setIsThinkingText] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [micVolume, setMicVolume] = useState(0);
     const [outputVolume, setOutputVolume] = useState(0);
     const [error, setError] = useState<string | null>(null);
+    const [hasVeoApiKey, setHasVeoApiKey] = useState(false);
 
     const aiRef = useRef<GoogleGenAI | null>(null);
+    const geminiServiceRef = useRef<GeminiService | null>(null);
     const sessionPromiseRef = useRef<Promise<any> | null>(null);
     const outputAudioContextRef = useRef<AudioContext | null>(null);
     const inputAudioContextRef = useRef<AudioContext | null>(null);
@@ -151,11 +136,65 @@ export const useJarvis = () => {
     const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
     const inputAnalyserRef = useRef<AnalyserNode | null>(null);
     const outputAnalyserRef = useRef<AnalyserNode | null>(null);
+    const outputGainNodeRef = useRef<GainNode | null>(null);
     const nextStartTimeRef = useRef(0);
     const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
     const inputAnimationRef = useRef<number | null>(null);
     const outputAnimationRef = useRef<number | null>(null);
+    const currentInputTranscriptionRef = useRef('');
+    const currentOutputTranscriptionRef = useRef('');
 
+    const initializeOutputAudio = useCallback(() => {
+        if (outputAudioContextRef.current && outputAudioContextRef.current.state === 'running') {
+            return true;
+        }
+        try {
+            const ctx = outputAudioContextRef.current && outputAudioContextRef.current.state !== 'closed'
+                ? outputAudioContextRef.current
+                : new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+
+            if (ctx.state === 'suspended') {
+                ctx.resume();
+            }
+
+            if (!outputGainNodeRef.current || !outputAnalyserRef.current) {
+                const gainNode = ctx.createGain();
+                const analyserNode = ctx.createAnalyser();
+                analyserNode.fftSize = 512;
+                
+                // Serial audio graph: Source -> Gain -> Analyser -> Destination
+                gainNode.connect(analyserNode);
+                analyserNode.connect(ctx.destination);
+                
+                outputGainNodeRef.current = gainNode;
+                outputAnalyserRef.current = analyserNode;
+            }
+            
+            outputAudioContextRef.current = ctx;
+            
+            if (outputAnimationRef.current) {
+                cancelAnimationFrame(outputAnimationRef.current);
+            }
+
+            const outputDataArray = new Uint8Array(outputAnalyserRef.current.frequencyBinCount);
+            const analyzeOutput = () => {
+                if (!outputAnalyserRef.current) {
+                    outputAnimationRef.current = null;
+                    return;
+                }
+                outputAnalyserRef.current.getByteTimeDomainData(outputDataArray);
+                let sum = outputDataArray.reduce((acc, val) => acc + Math.pow((val - 128) / 128, 2), 0);
+                setOutputVolume(Math.sqrt(sum / outputDataArray.length));
+                outputAnimationRef.current = requestAnimationFrame(analyzeOutput);
+            };
+            analyzeOutput();
+            return true;
+        } catch (e) {
+            console.error("Could not create output audio context", e);
+            setError("Could not initialize audio playback. Please check browser permissions.");
+            return false;
+        }
+    }, []);
 
     useEffect(() => {
         const apiKey = process.env.API_KEY;
@@ -165,8 +204,12 @@ export const useJarvis = () => {
         }
         try {
             aiRef.current = new GoogleGenAI({ apiKey });
+            geminiServiceRef.current = new GeminiService(apiKey);
+            if (window.aistudio?.hasSelectedApiKey) {
+                window.aistudio.hasSelectedApiKey().then(setHasVeoApiKey);
+            }
         } catch (e) {
-            console.error("Failed to initialize GoogleGenAI:", e);
+            console.error("Failed to initialize AI services:", e);
             setError('Failed to initialize AI services.');
         }
     }, []);
@@ -179,34 +222,6 @@ export const useJarvis = () => {
         localStorage.setItem(LOCAL_STORAGE_TASKS_KEY, JSON.stringify(tasks));
     }, [tasks]);
 
-    const speak = useCallback(async (text: string) => {
-        if (!aiRef.current) return;
-        try {
-            const response = await aiRef.current.models.generateContent({
-                model: "gemini-2.5-flash-preview-tts",
-                contents: [{ parts: [{ text }] }],
-                config: {
-                    responseModalities: [Modality.AUDIO],
-                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
-                },
-            });
-            const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-            if (base64Audio) {
-                if (!outputAudioContextRef.current || outputAudioContextRef.current.state === 'closed') {
-                    outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-                }
-                const ctx = outputAudioContextRef.current;
-                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
-                const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
-                const source = ctx.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(ctx.destination);
-                source.start(nextStartTimeRef.current);
-                nextStartTimeRef.current += audioBuffer.duration;
-            }
-        } catch (error) { console.error("TTS Error:", error); }
-    }, []);
-
     const addNewTask = useCallback((description: string): Task => {
         const newTask: Task = {
             id: crypto.randomUUID(), description, status: TaskStatus.InProgress, startTime: new Date().toISOString(),
@@ -218,295 +233,251 @@ export const useJarvis = () => {
     const updateTask = useCallback((id: string, status: TaskStatus, result?: string) => {
         setTasks(prev => prev.map(t => t.id === id ? { ...t, status, result } : t));
     }, []);
-
-    const removeTask = useCallback((taskId: string) => {
-        setTasks(prev => prev.filter(t => t.id !== taskId));
-    }, []);
     
     const addMessage = useCallback((message: Omit<Message, 'id' | 'timestamp'>) => {
         setMessages(prev => [...prev.filter(m => !m.isPartial), { ...message, id: crypto.randomUUID(), timestamp: new Date().toISOString() }]);
     }, []);
 
-    const updateLastMessage = useCallback((text: string, sender: Sender, isPartial: boolean) => {
+    const updateLastMessage = useCallback((fullText: string, sender: Sender, isPartial: boolean) => {
         setMessages(prev => {
             const lastMsg = prev[prev.length -1];
             if (lastMsg?.isPartial && lastMsg.sender === sender) {
-                return [...prev.slice(0, -1), { ...lastMsg, text: lastMsg.text + text, isPartial }];
+                return [...prev.slice(0, -1), { ...lastMsg, text: fullText, isPartial }];
             }
-            const newPartialMessage: Message = { id: crypto.randomUUID(), text, sender, timestamp: new Date().toISOString(), isPartial: true };
+            const newPartialMessage: Message = { id: crypto.randomUUID(), text: fullText, sender, timestamp: new Date().toISOString(), isPartial: true };
             return [...prev, newPartialMessage];
         });
     }, []);
     
     const executeToolCall = useCallback(async (fc: FunctionCall) => {
+        if (!geminiServiceRef.current) return { status: 'ERROR', message: 'Gemini service not initialized.' };
         const task = addNewTask(`Executing: ${fc.name}`);
         setIsProcessing(true);
-        let result: any = { status: 'OK' };
+        let responseTextForSession = 'Task completed successfully.';
 
         try {
             switch (fc.name) {
-                case 'searchWeb':
-                    const query = fc.args.query as string;
-                    await speak(`Searching the web for: ${query}`);
-                    const searchResponse = await aiRef.current!.models.generateContent({
-                        model: "gemini-2.5-flash",
-                        contents: query,
-                        config: { tools: [{googleSearch: {}}] },
-                    });
-                    const groundingChunks = searchResponse.candidates?.[0]?.groundingMetadata?.groundingChunks;
-                    const sources = groundingChunks?.map((chunk: any) => chunk.web).filter(Boolean) ?? [];
-                    const searchResultText = searchResponse.text;
-                    addMessage({ text: searchResultText, sender: Sender.AI, sources });
-                    await speak(searchResultText);
-                    result = { summary: searchResultText };
+                case 'searchWeb': {
+                    const { query } = fc.args;
+                    const response = await geminiServiceRef.current.groundedSearch(query as string);
+                    responseTextForSession = response.text;
+                    const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
+                        ?.map((chunk: any) => chunk.web).filter(Boolean) || [];
+                    addMessage({ text: responseTextForSession, sender: Sender.AI, sources });
                     break;
-                case 'openUrl':
-                    window.open(fc.args.url as string, '_blank');
-                    await speak(`Opening ${new URL(fc.args.url as string).hostname}`);
+                }
+                case 'searchNearby': {
+                    const { query } = fc.args;
+                    const response = await geminiServiceRef.current.mapsSearch(query as string);
+                    responseTextForSession = response.text;
+                    const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks
+                        ?.map((chunk: any) => chunk.maps).filter(Boolean) || [];
+                    addMessage({ text: responseTextForSession, sender: Sender.AI, sources });
                     break;
-                case 'setReminder':
-                    const timeInSeconds = parseInt(fc.args.time as string, 10);
-                    const subject = fc.args.subject as string;
-                    await speak(`Of course. I will remind you about "${subject}" in ${timeInSeconds} seconds.`);
-                    setTimeout(() => {
-                        speak(`Reminder: ${subject}`);
-                        alert(`J.A.R.V.I.S. Reminder: ${subject}`);
-                    }, timeInSeconds * 1000);
+                }
+                case 'generateImage': {
+                    const { prompt, aspectRatio } = fc.args;
+                    const imageUrl = await geminiServiceRef.current.generateImage(prompt as string, (aspectRatio || '1:1') as any);
+                    responseTextForSession = `I've generated the image as requested. I've added it to the Toolbelt for viewing.`;
+                    addMessage({ text: `${responseTextForSession}\n[View Image](${imageUrl})`, sender: Sender.AI });
                     break;
-                case 'getCurrentTime':
-                    const currentTime = new Date().toLocaleTimeString();
-                    await speak(`The current time is ${currentTime}`);
-                    result = { time: currentTime };
-                    break;
-                default:
-                    result = { error: 'Unknown function' };
-                    await speak(`I'm sorry, I don't know how to do that.`);
+                }
             }
-            updateTask(task.id, TaskStatus.Completed);
-            return { id: fc.id, name: fc.name, response: { result } };
-
-        } catch (error) {
-            console.error(`Error executing tool ${fc.name}:`, error);
-            updateTask(task.id, TaskStatus.Failed, (error as Error).message);
-            await speak(`I encountered an error while trying to ${fc.name}.`);
-            return { id: fc.id, name: fc.name, response: { result: { error: (error as Error).message } } };
+            updateTask(task.id, TaskStatus.Completed, responseTextForSession);
+        } catch (e) {
+            console.error(`Error executing tool ${fc.name}:`, e);
+            responseTextForSession = `I failed to execute the task: ${(e as Error).message}`;
+            updateTask(task.id, TaskStatus.Failed, (e as Error).message);
         } finally {
             setIsProcessing(false);
         }
-    }, [speak, addNewTask, addMessage, updateTask]);
-    
-    const disconnect = useCallback(() => {
-        sessionPromiseRef.current?.then(session => session.close());
-        sessionPromiseRef.current = null;
-        
+
+        return { result: { message: responseTextForSession }};
+    }, [addNewTask, updateTask, addMessage]);
+
+    const stopSession = useCallback(async () => {
+        if (sessionPromiseRef.current) {
+            const session = await sessionPromiseRef.current;
+            session.close();
+            sessionPromiseRef.current = null;
+        }
         if (inputAnimationRef.current) cancelAnimationFrame(inputAnimationRef.current);
-        if (outputAnimationRef.current) cancelAnimationFrame(outputAnimationRef.current);
-        inputAnimationRef.current = null;
-        outputAnimationRef.current = null;
-
-        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
-        mediaStreamRef.current = null;
-        
+        // Do not cancel the output animation frame, as TTS may still be playing
         scriptProcessorRef.current?.disconnect();
-        scriptProcessorRef.current = null;
-        
-        inputAnalyserRef.current?.disconnect();
-        inputAnalyserRef.current = null;
-        outputAnalyserRef.current?.disconnect();
-        outputAnalyserRef.current = null;
-
+        mediaStreamRef.current?.getTracks().forEach(track => track.stop());
         if (inputAudioContextRef.current?.state !== 'closed') inputAudioContextRef.current?.close();
-        inputAudioContextRef.current = null;
-
-        for (const source of audioSourcesRef.current.values()) source.stop();
+        audioSourcesRef.current.forEach(source => source.stop());
         audioSourcesRef.current.clear();
-        nextStartTimeRef.current = 0;
-
         setIsSessionActive(false);
-        setIsThinking(false);
-        setIsSpeaking(false);
         setMicVolume(0);
-        setOutputVolume(0);
     }, []);
 
-    const connect = useCallback(async () => {
-        if (!aiRef.current || sessionPromiseRef.current || error) return;
+    const startSession = useCallback(async () => {
+        if (!aiRef.current || sessionPromiseRef.current || isSessionActive) return;
         
-        setIsSessionActive(true);
+        initializeOutputAudio();
 
-        inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-        if (!outputAudioContextRef.current || outputAudioContextRef.current.state === 'closed') {
-            outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        }
-        const inputAudioContext = inputAudioContextRef.current;
-        const outputCtx = outputAudioContextRef.current;
-        outputAnalyserRef.current = outputCtx.createAnalyser();
-        outputAnalyserRef.current.fftSize = 256;
-        nextStartTimeRef.current = 0;
+        try {
+            mediaStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+            inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
+            
+            const inputSource = inputAudioContextRef.current.createMediaStreamSource(mediaStreamRef.current);
+            inputAnalyserRef.current = inputAudioContextRef.current.createAnalyser();
+            inputAnalyserRef.current.fftSize = 512;
+            inputSource.connect(inputAnalyserRef.current);
+            const micDataArray = new Uint8Array(inputAnalyserRef.current.frequencyBinCount);
+            const analyzeMic = () => {
+                if (!inputAnalyserRef.current) return;
+                inputAnalyserRef.current.getByteTimeDomainData(micDataArray);
+                let sum = micDataArray.reduce((acc, val) => acc + Math.pow((val - 128) / 128, 2), 0);
+                setMicVolume(Math.sqrt(sum / micDataArray.length));
+                inputAnimationRef.current = requestAnimationFrame(analyzeMic);
+            };
+            analyzeMic();
 
-        let localStream: MediaStream | null = null;
-      
-        sessionPromiseRef.current = aiRef.current.live.connect({
-            model: 'gemini-2.5-flash-native-audio-preview-09-2025',
-            callbacks: {
-                onopen: async () => {
-                    try {
-                        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                        mediaStreamRef.current = localStream;
-                        const source = inputAudioContext.createMediaStreamSource(localStream);
-                        scriptProcessorRef.current = inputAudioContext.createScriptProcessor(4096, 1, 1);
-                        inputAnalyserRef.current = inputAudioContext.createAnalyser();
-                        
-                        const analyser = inputAnalyserRef.current;
-                        analyser.fftSize = 512;
-                        const bufferLength = analyser.frequencyBinCount;
-                        const dataArray = new Uint8Array(bufferLength);
-                        
-                        source.connect(analyser);
-                        analyser.connect(scriptProcessorRef.current);
-                        scriptProcessorRef.current.connect(inputAudioContext.destination);
+            scriptProcessorRef.current = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
+            inputSource.connect(scriptProcessorRef.current);
+            scriptProcessorRef.current.connect(inputAudioContextRef.current.destination);
 
-                        const draw = () => {
-                            inputAnimationRef.current = requestAnimationFrame(draw);
-                            analyser?.getByteTimeDomainData(dataArray);
-                            let sum = 0;
-                            for(let i = 0; i < bufferLength; i++) {
-                                const v = (dataArray[i] / 128.0) - 1.0;
-                                sum += v * v;
-                            }
-                            const rms = Math.sqrt(sum / bufferLength);
-                            setMicVolume(rms * 2.5);
+            sessionPromiseRef.current = aiRef.current.live.connect({
+                model: 'gemini-2.5-flash-native-audio-preview-09-2025',
+                config: {
+                    responseModalities: [Modality.AUDIO],
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } },
+                    systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise unless asked for detail. You can generate images and search the web.',
+                    inputAudioTranscription: {},
+                    outputAudioTranscription: {},
+                    tools: [{ functionDeclarations }],
+                },
+                callbacks: {
+                    onopen: () => {
+                        setIsSessionActive(true);
+                        scriptProcessorRef.current!.onaudioprocess = (e) => {
+                            const pcmBlob = createBlob(e.inputBuffer.getChannelData(0));
+                            sessionPromiseRef.current?.then((s) => s.sendRealtimeInput({ media: pcmBlob }));
                         };
-                        draw();
+                    },
+                    onmessage: async (message: LiveServerMessage) => {
+                       // Transcription handling, state updates, etc.
+                        if (message.serverContent?.inputTranscription) {
+                            currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
+                            updateLastMessage(currentInputTranscriptionRef.current, Sender.User, true);
+                        } else if (message.serverContent?.outputTranscription) {
+                            setIsThinking(false);
+                            setIsSpeaking(true);
+                            currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
+                            updateLastMessage(currentOutputTranscriptionRef.current, Sender.AI, true);
+                        }
 
-                        scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
-                            const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-                            const pcmBlob = createBlob(inputData);
-                            sessionPromiseRef.current?.then((session) => {
-                                session.sendRealtimeInput({ media: pcmBlob });
+                        if (message.serverContent?.turnComplete) {
+                            if (currentInputTranscriptionRef.current.trim()) addMessage({ text: currentInputTranscriptionRef.current.trim(), sender: Sender.User });
+                            if (currentOutputTranscriptionRef.current.trim()) addMessage({ text: currentOutputTranscriptionRef.current.trim(), sender: Sender.AI });
+                            currentInputTranscriptionRef.current = '';
+                            currentOutputTranscriptionRef.current = '';
+                            // DO NOT set isSpeaking to false here. This causes a race condition where the orb animation
+                            // stops before the final audio chunk has finished playing. The 'ended' event on the
+                            // audio source is the correct source of truth for this state.
+                            setIsThinking(false);
+                        }
+
+                        const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+                        if (base64Audio && outputAudioContextRef.current) {
+                            setIsThinking(false);
+                            setIsSpeaking(true);
+                            const ctx = outputAudioContextRef.current;
+                            nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
+                            const audioBuffer = await decodeAudioData(decode(base64Audio), ctx, 24000, 1);
+                            const source = ctx.createBufferSource();
+                            source.buffer = audioBuffer;
+                            source.connect(outputGainNodeRef.current!);
+                            source.addEventListener('ended', () => {
+                                audioSourcesRef.current.delete(source);
+                                if (audioSourcesRef.current.size === 0) setIsSpeaking(false);
                             });
-                        };
-                    } catch (err) {
-                        console.error("Error getting audio stream:", err);
-                        setError("Microphone access denied. Please enable microphone permissions in your browser settings.");
-                        disconnect();
-                    }
-                },
-                onmessage: async (message: LiveServerMessage) => {
-                    if (message.serverContent?.inputTranscription) {
-                        setIsThinking(true);
-                        const text = message.serverContent.inputTranscription.text;
-                        updateLastMessage(text, Sender.User, true);
-                    } else if (message.serverContent?.outputTranscription) {
-                        setIsThinking(false);
-                        const text = message.serverContent.outputTranscription.text;
-                        updateLastMessage(text, Sender.AI, true);
-                    }
-
-                    if (message.serverContent?.turnComplete) {
-                        setIsThinking(false);
-                        setMessages(prev => prev.map(m => (m.isPartial ? { ...m, isPartial: false } : m)));
-                    }
-
-                    if (message.toolCall) {
-                        setIsThinking(false);
-                        for (const fc of message.toolCall.functionCalls) {
-                            const response = await executeToolCall(fc);
-                            sessionPromiseRef.current?.then(s => s.sendToolResponse({ functionResponses: response }));
+                            source.start(nextStartTimeRef.current);
+                            nextStartTimeRef.current += audioBuffer.duration;
+                            audioSourcesRef.current.add(source);
                         }
-                    }
 
-                    const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData.data;
-                    if (base64Audio && outputCtx && outputAnalyserRef.current) {
-                        if (audioSourcesRef.current.size === 0) {
-                            const drawOutput = () => {
-                                const analyser = outputAnalyserRef.current;
-                                if (!analyser || audioSourcesRef.current.size === 0) {
-                                    setOutputVolume(0);
-                                    setIsSpeaking(false);
-                                    if (outputAnimationRef.current) cancelAnimationFrame(outputAnimationRef.current);
-                                    outputAnimationRef.current = null;
-                                    return;
-                                }
-                                outputAnimationRef.current = requestAnimationFrame(drawOutput);
-                                const bufferLength = analyser.frequencyBinCount;
-                                const dataArray = new Uint8Array(bufferLength);
-                                analyser.getByteTimeDomainData(dataArray);
-                                let sum = 0;
-                                for (let i = 0; i < bufferLength; i++) {
-                                    const v = (dataArray[i] / 128.0) - 1.0;
-                                    sum += v * v;
-                                }
-                                const rms = Math.sqrt(sum / bufferLength);
-                                setOutputVolume(rms * 2);
-                                setIsSpeaking(rms > 0.01);
-                            };
-                            drawOutput();
+                        if (message.toolCall) {
+                            setIsThinking(false);
+                            for (const fc of message.toolCall.functionCalls) {
+                                const result = await executeToolCall(fc);
+                                sessionPromiseRef.current?.then((s) => {
+                                    s.sendToolResponse({ functionResponses: { id: fc.id, name: fc.name, response: { result: JSON.stringify(result) } } });
+                                });
+                            }
                         }
-                        setIsThinking(false);
-                        nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
-                        const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000, 1);
-                        const source = outputCtx.createBufferSource();
-                        source.buffer = audioBuffer;
-                        source.connect(outputAnalyserRef.current);
-                        outputAnalyserRef.current.connect(outputCtx.destination);
-                        source.addEventListener('ended', () => {
-                          audioSourcesRef.current.delete(source);
-                          if(audioSourcesRef.current.size === 0) setIsSpeaking(false);
-                        });
-                        source.start(nextStartTimeRef.current);
-                        nextStartTimeRef.current += audioBuffer.duration;
-                        audioSourcesRef.current.add(source);
-                    }
+                    },
+                    onerror: (e: ErrorEvent) => {
+                        console.error('J.A.R.V.I.S. session error:', e);
+                        setError('A session error occurred. Please restart.');
+                        stopSession();
+                    },
+                    onclose: () => {
+                        console.log('J.A.R.V.I.S. session closed.');
+                        stopSession();
+                    },
+                }
+            });
+        } catch(e) {
+            console.error("Failed to start session:", e);
+            setError(`Failed to start session: ${(e as Error).message}. Check microphone permissions.`);
+        }
+    }, [isSessionActive, addMessage, updateLastMessage, executeToolCall, stopSession, initializeOutputAudio]);
 
-                    if (message.serverContent?.interrupted) {
-                        for (const source of audioSourcesRef.current.values()) source.stop();
-                        audioSourcesRef.current.clear();
-                        nextStartTimeRef.current = 0;
-                        setIsSpeaking(false);
-                    }
-                },
-                onerror: (e: ErrorEvent) => {
-                    console.error("Session error:", e);
-                    setError("A session error occurred. Please refresh the page.");
-                    disconnect();
-                },
-                onclose: () => {
-                    disconnect();
-                },
-            },
-            config: {
-                responseModalities: [Modality.AUDIO],
-                speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
-                outputAudioTranscription: {},
-                inputAudioTranscription: {},
-                systemInstruction: 'You are J.A.R.V.I.S., a witty, helpful, and slightly sarcastic AI assistant. Keep your responses concise. Use the searchWeb tool for any questions about recent events or real-time information.',
-                tools: [{ functionDeclarations }],
-            },
-        });
-    }, [executeToolCall, disconnect, updateLastMessage, error]);
-    
-    useEffect(() => {
-        connect();
-        return () => disconnect();
-    }, [connect, disconnect]);
+    const sendTextMessage = useCallback(async (message: string) => {
+        if (!geminiServiceRef.current) return;
+        addMessage({ text: message, sender: Sender.User });
+        setIsThinkingText(true);
 
-    const clearSession = () => {
+        initializeOutputAudio();
+
+        try {
+            const response = await geminiServiceRef.current.generateText(message, false);
+            const responseText = response.text;
+            addMessage({ text: responseText, sender: Sender.AI });
+            
+            const audioBufferData = await geminiServiceRef.current.textToSpeech(responseText);
+            if (outputAudioContextRef.current && outputGainNodeRef.current) {
+                const audioBuffer = await decodeAudioData(
+                    new Uint8Array(audioBufferData),
+                    outputAudioContextRef.current,
+                    24000,
+                    1
+                );
+                const source = outputAudioContextRef.current.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(outputGainNodeRef.current);
+                source.start();
+                setIsSpeaking(true);
+                source.onended = () => setIsSpeaking(false);
+            }
+        } catch (e) {
+            console.error("Error in text chat:", e);
+            addMessage({ text: "My apologies, I encountered an error.", sender: Sender.System });
+        } finally {
+            setIsThinkingText(false);
+        }
+    }, [addMessage, initializeOutputAudio]);
+
+
+    const clearSession = useCallback(() => {
         setMessages([greetingMessage]);
         setTasks([]);
         localStorage.removeItem(LOCAL_STORAGE_MESSAGES_KEY);
         localStorage.removeItem(LOCAL_STORAGE_TASKS_KEY);
-        for (const source of audioSourcesRef.current.values()) source.stop();
-        audioSourcesRef.current.clear();
-        nextStartTimeRef.current = 0;
-        addMessage({ sender: Sender.System, text: "Session cleared." });
+    }, []);
+
+    const restartSession = useCallback(async () => {
+        await stopSession();
+        clearSession();
+        setTimeout(startSession, 100);
+    }, [stopSession, clearSession, startSession]);
+    
+    return {
+        messages, isSessionActive, isThinking, isProcessing, isSpeaking, micVolume, outputVolume, error,
+        clearSession, restartSession, sendTextMessage, isThinkingText, startSession, stopSession,
+        geminiService: geminiServiceRef.current, hasVeoApiKey, addMessage
     };
-
-    const restartSession = useCallback(() => {
-        addMessage({ sender: Sender.System, text: "Restarting session..." });
-        disconnect();
-        setTimeout(() => connect(), 100);
-    }, [disconnect, connect, addMessage]);
-
-    return { messages, tasks, isSessionActive, isThinking, isProcessing, isSpeaking, micVolume, outputVolume, error, clearSession, restartSession, removeTask };
 };

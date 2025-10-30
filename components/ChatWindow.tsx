@@ -16,7 +16,7 @@ const ChatWindow: React.FC<ChatWindowProps> = ({ messages }) => {
   const MessageBubble: React.FC<{ message: Message }> = ({ message }) => {
     const isUser = message.sender === Sender.User;
     const bubbleClasses = isUser
-      ? 'bg-red-600/50 self-end rounded-br-none'
+      ? 'bg-red-700 self-end rounded-br-none'
       : 'bg-slate-800/40 border border-slate-700/50 self-start rounded-bl-none';
     
     const alignClasses = isUser ? 'items-end' : 'items-start';

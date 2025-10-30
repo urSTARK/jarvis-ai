@@ -1,87 +1,255 @@
-import React from 'react';
+
+import React, { useEffect, useRef, useState } from 'react';
 
 interface OrbProps {
   isListening: boolean;
   isThinking: boolean;
   isProcessing: boolean;
   isSpeaking: boolean;
-  micVolume: number; // Normalized value 0-1
-  outputVolume: number; // Normalized value 0-1
+  micVolume: number;
+  outputVolume: number;
 }
 
+// --- Color Helpers ---
+const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16),
+  } : null;
+};
+
+const lerpColor = (
+  color1: { r: number; g: number; b: number },
+  color2: { r: number; g: number; b: number },
+  factor: number
+): string => {
+  const r = Math.round(color1.r + factor * (color2.r - color1.r));
+  const g = Math.round(color1.g + factor * (color2.g - color1.g));
+  const b = Math.round(color1.b + factor * (color2.b - color1.b));
+  return `rgb(${r}, ${g}, ${b})`;
+};
+
+const COLORS = {
+  LISTENING_LOW: hexToRgb('#00FF7F'),  // SpringGreen for normal voice
+  LISTENING_MID: hexToRgb('#FFFF00'),  // Yellow for loud voice
+  LISTENING_HIGH: hexToRgb('#FF4500'), // OrangeRed for too loud voice
+  SPEAKING: 'rgb(255, 58, 58)',       // #FF3A3A for answering
+  THINKING: 'rgb(138, 43, 226)',      // #8A2BE2 - BlueViolet
+  PROCESSING: 'rgb(255, 165, 0)',     // #FFA500 - Orange
+  DEFAULT: 'rgb(255, 58, 58)',        // #FF3A3A for default/idle state
+};
+
+const ringConfig = [
+  // Innermost, main ring with inner shadow
+  { id: 1, radius: 150, strokeWidth: 3.5, opacity: 1.0, speed: 1, amplitudeFactor: 1, frequency: { f1: 6, f2: 3 }, filter: "url(#inner-shadow)" },
+  // Outer rings for a layered, fluid glow effect
+  { id: 2, radius: 155, strokeWidth: 2, opacity: 0.6, speed: 0.7, amplitudeFactor: 1.2, frequency: { f1: 5, f2: 2.5 } },
+  { id: 3, radius: 160, strokeWidth: 1.5, opacity: 0.4, speed: 1.3, amplitudeFactor: 0.8, frequency: { f1: 7, f2: 3.5 } },
+  { id: 4, radius: 165, strokeWidth: 1, opacity: 0.2, speed: 0.5, amplitudeFactor: 1.5, frequency: { f1: 4, f2: 2 } },
+];
+
+
 const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume }) => {
-  const combinedVolume = Math.max(micVolume, outputVolume);
-  const isAudiblyActive = isListening || isSpeaking;
+  const pathRefs = useRef<(SVGPathElement | null)[]>([]);
+  // Fix: Initialize useRef with null to prevent "Expected 1 arguments, but got 0" error in some environments.
+  const animationFrameRef = useRef<number | null>(null);
+  const smoothedVolumeRef = useRef(0);
+  const isInitialMount = useRef(true);
+  
+  const [currentColor, setCurrentColor] = useState(COLORS.DEFAULT);
 
-  // The orb morphs when there is any audible activity.
-  const isMorphing = isAudiblyActive && combinedVolume > 0.02;
+  // Haptic feedback on state change
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+    } else {
+      if (navigator.vibrate) {
+        navigator.vibrate(50);
+      }
+    }
+  }, [isListening, isThinking, isProcessing, isSpeaking]);
+  
+  // Determine current color based on state
+  useEffect(() => {
+    let color = COLORS.DEFAULT; // Start with the default red.
 
-  // The main orb "glass" scales with voice for a breathing effect
-  const orbScale = 1 + (isAudiblyActive ? combinedVolume * 0.05 : 0);
+    if (isProcessing) {
+      color = COLORS.PROCESSING;
+    } else if (isSpeaking) {
+      color = COLORS.SPEAKING;
+    } else if (isThinking) {
+      color = COLORS.THINKING;
+    } else if (isListening) {
+      // Amplify and clamp volume for a better visual range
+      const volume = Math.min(micVolume * 2.5, 1);
+      if (volume < 0.5) {
+        if (COLORS.LISTENING_LOW && COLORS.LISTENING_MID) {
+          color = lerpColor(COLORS.LISTENING_LOW, COLORS.LISTENING_MID, volume * 2);
+        } else if (COLORS.LISTENING_LOW) {
+          color = `rgb(${COLORS.LISTENING_LOW.r}, ${COLORS.LISTENING_LOW.g}, ${COLORS.LISTENING_LOW.b})`;
+        }
+      } else {
+        if (COLORS.LISTENING_MID && COLORS.LISTENING_HIGH) {
+          color = lerpColor(COLORS.LISTENING_MID, COLORS.LISTENING_HIGH, (volume - 0.5) * 2);
+        } else if (COLORS.LISTENING_HIGH) {
+           color = `rgb(${COLORS.LISTENING_HIGH.r}, ${COLORS.LISTENING_HIGH.g}, ${COLORS.LISTENING_HIGH.b})`;
+        }
+      }
+    }
+    setCurrentColor(color);
+  }, [isListening, isThinking, isProcessing, isSpeaking, micVolume]);
 
-  // The glow is more reactive
-  const glowScale = 1 + (isAudiblyActive ? combinedVolume * 0.4 : 0);
 
   const getStatusText = () => {
-    if (isListening) return "Listening...";
-    if (isSpeaking) return "Speaking...";
-    if (isThinking) return "Thinking...";
     if (isProcessing) return "Processing...";
+    if (isSpeaking) return "Answering...";
+    if (isThinking) return "Thinking...";
+    if (isListening) return "Listening...";
     return "Online";
   };
+  
+  // Keep a ref to the latest props to avoid re-running the effect on every frame.
+  const latestProps = useRef({ isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume });
+  useEffect(() => {
+    latestProps.current = { isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume };
+  });
+
+  useEffect(() => {
+    const animate = (time: number) => {
+      // Get the latest props from the ref inside the animation loop.
+      const { isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume } = latestProps.current;
+      const timeInSeconds = time * 0.001;
+      
+      let targetAmplitude = 0;
+      // Define a base rotation speed that changes based on the state.
+      let baseRotationSpeed = 1.0; // Increased default idle/listening speed for visibility
+
+      // The order of these checks is critical for correct state display.
+      if (isSpeaking) {
+        targetAmplitude = Math.min(outputVolume * 200, 100);
+        baseRotationSpeed = 1.2; 
+      } else if (isProcessing) {
+        // Use a subtle pulsing effect for processing
+        const pulse = (Math.sin(timeInSeconds * 2.5) + 1) / 2;
+        targetAmplitude = 5 + (pulse * 10);
+        baseRotationSpeed = 1.4;
+      } else if (isThinking) {
+        // Create a slow, deep "breathing" effect
+        const pulse = (Math.sin(timeInSeconds * 1.5) + 1) / 2;
+        targetAmplitude = 10 + (pulse * 15);
+        baseRotationSpeed = 1.6;
+      } else if (isListening) {
+        // User stated this sensitivity is perfect.
+        targetAmplitude = Math.min(micVolume * 400, 100);
+        // Uses the default baseRotationSpeed
+      }
+      
+      // Increase smoothing factor for a faster, more responsive feel.
+      smoothedVolumeRef.current += (targetAmplitude - smoothedVolumeRef.current) * 0.25;
+
+      const points = 120;
+      const centerX = 200;
+      const centerY = 200;
+      
+      // Create a slow, oscillating "drift" in the rotation speed for a fluid, random-like effect.
+      // This factor will gently speed up and slow down the base rotation.
+      const fluidRotationFactor = 1 + Math.sin(timeInSeconds * 0.5) * 0.2; // Varies between 0.8 and 1.2
+      const expansionPulse = Math.sin(timeInSeconds * 1.5) * 6; // A global pulse for expansion/compression
+
+      pathRefs.current.forEach((path, index) => {
+        if (!path) return;
+
+        const config = ringConfig[index];
+        
+        // Swirling effect: combine base speed, fluid factor, and individual ring speed.
+        const rotation = timeInSeconds * 0.3 * config.speed * baseRotationSpeed * fluidRotationFactor;
+        
+        let d = '';
+        
+        for (let i = 0; i <= points; i++) {
+          const angle = (i / points) * Math.PI * 2 + rotation; // Apply rotation here
+          
+          // Use the smoothed volume to control the wave amplitude
+          const amplitude = smoothedVolumeRef.current * config.amplitudeFactor;
+          
+          // Combine sine waves for a more organic, fluid, and randomized feel
+          const timeFactor = time * 0.0002;
+          const displacement1 = Math.sin(angle * config.frequency.f1 + timeFactor * config.speed) * amplitude;
+          const displacement2 = Math.sin(angle * config.frequency.f2 - timeFactor * config.speed * 0.7) * amplitude * 0.5;
+
+          const currentRadius = config.radius + expansionPulse + displacement1 + displacement2;
+          
+          const x = centerX + currentRadius * Math.cos(angle);
+          const y = centerY + currentRadius * Math.sin(angle);
+          
+          if (i === 0) {
+            d += `M${x},${y}`;
+          } else {
+            d += ` L${x},${y}`;
+          }
+        }
+        
+        d += ' Z';
+        path.setAttribute('d', d);
+      });
+
+      animationFrameRef.current = requestAnimationFrame(animate);
+    };
+
+    animationFrameRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, []); // Empty dependency array means this effect runs only once on mount.
 
   return (
-    <div className="relative w-64 h-64 md:w-80 md:h-80 flex items-center justify-center flex-shrink-0">
-      {/* Dual-color glow effect */}
-      {/* Purple Glow - top */}
-      <div
-        className="absolute w-[150%] h-[150%] transition-transform duration-200 ease-out"
-        style={{
-          background: 'radial-gradient(circle, rgba(138, 43, 226, 0.4) 0%, rgba(75, 0, 130, 0) 60%)',
-          filter: 'blur(60px)',
-          transform: `translateY(-20%) scale(${glowScale})`,
-        }}
-      />
-      {/* Blue/Teal Glow - bottom */}
-      <div
-        className="absolute w-[150%] h-[150%] transition-transform duration-200 ease-out"
-        style={{
-          background: 'radial-gradient(circle, rgba(30, 144, 255, 0.4) 0%, rgba(0, 128, 128, 0) 60%)',
-          filter: 'blur(60px)',
-          transform: `translateY(20%) scale(${glowScale})`,
-        }}
-      />
-      
-      {/* The visible "glass" orb that morphs */}
-      <div 
-        className={`
-          w-full h-full bg-black/25 backdrop-blur-lg border border-white/10 shadow-lg 
-          transition-all duration-500 ease-in-out
-          ${isMorphing ? 'animate-morph' : 'rounded-full'}
-        `}
-        style={{ 
-          transform: `scale(${orbScale})`,
-          animationDuration: isMorphing ? (isSpeaking ? '5s' : '10s') : 'initial'
-        }}
+    <div className="relative w-full h-80 flex items-center justify-center flex-shrink-0 text-white font-sans text-center">
+      <svg
+        viewBox="0 0 400 400"
+        className="absolute w-full h-full transition-all duration-300"
+        style={{ filter: `drop-shadow(0 0 35px ${currentColor}) drop-shadow(0 0 10px ${currentColor})` }}
       >
-        {/* Thinking indicator: a spinning ring. Only shown when not speaking/listening. */}
-        {isThinking && !isAudiblyActive && (
-          <div className="absolute inset-0 border-[2px] border-purple-400/50 rounded-full animate-spin" style={{ animationDuration: '3s' }}></div>
-        )}
-        
-        {/* Idle state aesthetic rings */}
-        {!isMorphing && !isThinking && (
-          <>
-            <div className="absolute inset-0 border-[3px] border-purple-500/10 rounded-full animate-pulse-slow"></div>
-            <div className="absolute inset-2 border border-blue-300/10 rounded-full"></div>
-          </>
-        )}
-      </div>
+        <defs>
+          <filter id="inner-shadow">
+            <feComponentTransfer in="SourceAlpha" result="inverted-alpha">
+              <feFuncA type="table" tableValues="1 0" />
+            </feComponentTransfer>
+            <feGaussianBlur in="inverted-alpha" stdDeviation="4" result="blur" />
+            <feFlood floodColor="#000" floodOpacity="0.75" result="color" />
+            <feComposite in="color" in2="blur" operator="in" result="shadow" />
+            <feComposite in="shadow" in2="SourceGraphic" operator="in" result="inner-shadow-effect" />
+            <feMerge>
+              <feMergeNode in="SourceGraphic" />
+              <feMergeNode in="inner-shadow-effect" />
+            </feMerge>
+          </filter>
+        </defs>
+        {ringConfig.map((config, index) => (
+          <path
+            key={config.id}
+            ref={el => { pathRefs.current[index] = el; }}
+            stroke={currentColor}
+            strokeWidth={config.strokeWidth}
+            strokeOpacity={config.opacity}
+            fill="none"
+            style={{ transition: 'stroke 0.3s ease-in-out' }}
+            filter={config.filter || 'none'}
+          />
+        ))}
+      </svg>
 
-      {/* Text Content */}
-      <div className="absolute flex flex-col items-center justify-center text-white font-sans text-center pointer-events-none">
-        <h1 className="text-4xl font-bold tracking-wider">J.A.R.V.I.S.</h1>
-        <p className="text-lg opacity-80 mt-1">{getStatusText()}</p>
+      <div className="relative z-10 flex flex-col items-center justify-center">
+        <h1 className="text-3xl md:text-4xl font-light tracking-widest transition-all duration-300" style={{ textShadow: `0 0 10px ${currentColor}` }}>
+          J.A.R.V.I.S.
+        </h1>
+        <div className="px-4 py-1 mt-2">
+            <p className="text-base md:text-lg opacity-80 tracking-widest">{getStatusText()}</p>
+        </div>
       </div>
     </div>
   );

@@ -29,7 +29,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isListening, onToggl
             onChange={(e) => setInputValue(e.target.value)}
             placeholder="Type your command or just talk to me..."
             disabled={isThinking || isListening}
-            className="w-full bg-slate-800/80 border border-slate-600 rounded-full py-3 px-6 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-400 transition-shadow duration-300"
+            className="w-full bg-slate-800/80 border border-slate-600 rounded-full py-3 px-6 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500 transition-shadow duration-300"
           />
         </div>
         <button
@@ -37,7 +37,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isListening, onToggl
           onClick={onToggleListen}
           disabled={isThinking}
           className={`p-3 rounded-full transition-colors duration-300 ${
-            isListening ? 'bg-red-500 animate-pulse' : 'bg-cyan-500 hover:bg-cyan-400'
+            isListening ? 'bg-red-500 animate-pulse' : 'bg-red-600 hover:bg-red-500'
           } ${isThinking ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -47,7 +47,7 @@ const InputBar: React.FC<InputBarProps> = ({ onSendMessage, isListening, onToggl
         <button
           type="submit"
           disabled={isThinking || !inputValue.trim()}
-          className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 px-6 rounded-full transition-colors duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="bg-red-600 hover:bg-red-500 text-white font-bold py-3 px-6 rounded-full transition-colors duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Send
         </button>
