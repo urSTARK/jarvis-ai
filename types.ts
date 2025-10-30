@@ -1,3 +1,4 @@
+
 export enum Sender {
   User = 'user',
   AI = 'ai',
@@ -13,8 +14,9 @@ export interface Message {
   isPartial?: boolean;
 }
 
+// Fix: Add missing Task and TaskStatus types to resolve import errors.
 export enum TaskStatus {
-  InProgress = 'in-progress',
+  InProgress = 'in_progress',
   Completed = 'completed',
   Failed = 'failed',
 }
@@ -23,6 +25,6 @@ export interface Task {
   id: string;
   description: string;
   status: TaskStatus;
-  result?: string;
   startTime: string;
+  result?: string;
 }

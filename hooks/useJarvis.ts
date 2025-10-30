@@ -3,6 +3,10 @@ import { GoogleGenAI, LiveServerMessage, Modality, Type, FunctionDeclaration, Bl
 import type { Message, Task } from '../types';
 import { Sender, TaskStatus } from '../types';
 
+// --- Constants for localStorage keys ---
+const LOCAL_STORAGE_MESSAGES_KEY = 'jarvis-messages';
+const LOCAL_STORAGE_TASKS_KEY = 'jarvis-tasks';
+
 // --- Helper functions for audio processing ---
 function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
@@ -111,7 +115,7 @@ const greetingMessage: Message = {
 export const useJarvis = () => {
     const [messages, setMessages] = useState<Message[]>(() => {
         try {
-            const saved = localStorage.getItem('jarvis-messages');
+            const saved = localStorage.getItem(LOCAL_STORAGE_MESSAGES_KEY);
             if (saved) {
                 const parsed = JSON.parse(saved);
                 return Array.isArray(parsed) && parsed.length > 0 ? parsed : [greetingMessage];
@@ -124,7 +128,7 @@ export const useJarvis = () => {
     });
     const [tasks, setTasks] = useState<Task[]>(() => {
         try {
-            const saved = localStorage.getItem('jarvis-tasks');
+            const saved = localStorage.getItem(LOCAL_STORAGE_TASKS_KEY);
             return saved ? JSON.parse(saved) : [];
         } catch (error) {
             console.error("Failed to parse tasks from localStorage", error);
@@ -168,11 +172,11 @@ export const useJarvis = () => {
     }, []);
 
     useEffect(() => {
-        localStorage.setItem('jarvis-messages', JSON.stringify(messages));
+        localStorage.setItem(LOCAL_STORAGE_MESSAGES_KEY, JSON.stringify(messages));
     }, [messages]);
 
     useEffect(() => {
-        localStorage.setItem('jarvis-tasks', JSON.stringify(tasks));
+        localStorage.setItem(LOCAL_STORAGE_TASKS_KEY, JSON.stringify(tasks));
     }, [tasks]);
 
     const speak = useCallback(async (text: string) => {
@@ -490,8 +494,8 @@ export const useJarvis = () => {
     const clearSession = () => {
         setMessages([greetingMessage]);
         setTasks([]);
-        localStorage.removeItem('jarvis-messages');
-        localStorage.removeItem('jarvis-tasks');
+        localStorage.removeItem(LOCAL_STORAGE_MESSAGES_KEY);
+        localStorage.removeItem(LOCAL_STORAGE_TASKS_KEY);
         for (const source of audioSourcesRef.current.values()) source.stop();
         audioSourcesRef.current.clear();
         nextStartTimeRef.current = 0;

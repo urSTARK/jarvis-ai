@@ -8,7 +8,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       body {
-        background-color: #0a0a1a;
+        /* Make background darker, closer to black but with a hint of deep blue */
+        background-color: #02040a;
         color: #e0e0e0;
       }
       .custom-scrollbar::-webkit-scrollbar {
@@ -18,9 +19,27 @@
         background: transparent;
       }
       .custom-scrollbar::-webkit-scrollbar-thumb {
-        background-color: rgba(255, 58, 58, 0.3);
+        background-color: rgba(138, 43, 226, 0.3); /* Purple scrollbar to match orb */
         border-radius: 20px;
         border: 3px solid transparent;
+      }
+      @keyframes pulse-slow {
+        0%, 100% { opacity: 0.5; }
+        50% { opacity: 1; }
+      }
+      .animate-pulse-slow {
+        animation: pulse-slow 5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+      @keyframes morph {
+        0%, 100% {
+          border-radius: 60% 40% 30% 70% / 60% 30% 70% 40%;
+        }
+        50% {
+          border-radius: 30% 60% 70% 40% / 50% 60% 30% 60%;
+        }
+      }
+      .animate-morph {
+        animation: morph 8s ease-in-out infinite;
       }
     </style>
   <script type="importmap">

@@ -10,49 +10,78 @@ interface OrbProps {
 }
 
 const Orb: React.FC<OrbProps> = ({ isListening, isThinking, isProcessing, isSpeaking, micVolume, outputVolume }) => {
-  const baseClasses = "relative w-48 h-48 md:w-64 md:h-64 rounded-full transition-all duration-500 ease-in-out flex items-center justify-center";
-  
-  const getOrbStateClasses = () => {
-    if (isListening) return 'scale-110 shadow-lg shadow-red-500/50';
-    if (isThinking) return 'animate-pulse';
-    if(isProcessing || isSpeaking) return 'shadow-md shadow-amber-400/50'
-    return '';
-  }
-
   const combinedVolume = Math.max(micVolume, outputVolume);
-  const volumeScale = 1 + combinedVolume * 0.1;
-  const auraBaseOpacity = 0.1;
-  const auraVolumeOpacity = combinedVolume * 0.3;
-  const speakingAuraOpacity = 0.2 + outputVolume * 0.4;
+  const isAudiblyActive = isListening || isSpeaking;
+
+  // The orb morphs when there is any audible activity.
+  const isMorphing = isAudiblyActive && combinedVolume > 0.02;
+
+  // The main orb "glass" scales with voice for a breathing effect
+  const orbScale = 1 + (isAudiblyActive ? combinedVolume * 0.05 : 0);
+
+  // The glow is more reactive
+  const glowScale = 1 + (isAudiblyActive ? combinedVolume * 0.4 : 0);
+
+  const getStatusText = () => {
+    if (isListening) return "Listening...";
+    if (isSpeaking) return "Speaking...";
+    if (isThinking) return "Thinking...";
+    if (isProcessing) return "Processing...";
+    return "Online";
+  };
 
   return (
-    <div className={`${baseClasses} ${getOrbStateClasses()}`} style={{ transform: `scale(${volumeScale})`}}>
-      {/* Aura layers */}
+    <div className="relative w-64 h-64 md:w-80 md:h-80 flex items-center justify-center flex-shrink-0">
+      {/* Dual-color glow effect */}
+      {/* Purple Glow - top */}
+      <div
+        className="absolute w-[150%] h-[150%] transition-transform duration-200 ease-out"
+        style={{
+          background: 'radial-gradient(circle, rgba(138, 43, 226, 0.4) 0%, rgba(75, 0, 130, 0) 60%)',
+          filter: 'blur(60px)',
+          transform: `translateY(-20%) scale(${glowScale})`,
+        }}
+      />
+      {/* Blue/Teal Glow - bottom */}
+      <div
+        className="absolute w-[150%] h-[150%] transition-transform duration-200 ease-out"
+        style={{
+          background: 'radial-gradient(circle, rgba(30, 144, 255, 0.4) 0%, rgba(0, 128, 128, 0) 60%)',
+          filter: 'blur(60px)',
+          transform: `translateY(20%) scale(${glowScale})`,
+        }}
+      />
+      
+      {/* The visible "glass" orb that morphs */}
       <div 
-        className="absolute inset-[-40px] rounded-full bg-red-500/50 blur-3xl transition-opacity duration-200" 
-        style={{ opacity: auraBaseOpacity + auraVolumeOpacity * 0.5 + (isSpeaking ? speakingAuraOpacity : 0), transform: `scale(${1 + combinedVolume * 0.05})` }}
-      ></div>
-       <div 
-        className="absolute inset-[-20px] rounded-full bg-red-400/50 blur-2xl transition-opacity duration-200" 
-        style={{ opacity: auraBaseOpacity + auraVolumeOpacity + (isSpeaking ? speakingAuraOpacity * 0.8 : 0), transform: `scale(${1 + combinedVolume * 0.1})` }}
-      ></div>
-
-      <div className="absolute inset-0 bg-gradient-to-br from-red-500 to-red-800 rounded-full blur-lg opacity-60"></div>
-      <div className="absolute inset-2 bg-slate-900 rounded-full"></div>
-      <div className="relative w-full h-full rounded-full overflow-hidden">
-        {/* Inner rings */}
-        <div className={`absolute inset-4 border-2 border-red-500/30 rounded-full ${isListening || isSpeaking ? 'animate-spin-slow' : ''}`}></div>
-        <div className={`absolute inset-8 border border-red-500/20 rounded-full ${isListening || isSpeaking ? 'animate-spin-slow-reverse' : ''}`}></div>
-        <div className={`absolute inset-12 border-2 border-red-600/30 rounded-full ${isThinking || isProcessing ? 'animate-ping' : ''}`}></div>
-
-        {/* Core glow */}
-        <div className="absolute inset-1/4 rounded-full bg-red-400/20 blur-xl"></div>
+        className={`
+          w-full h-full bg-black/25 backdrop-blur-lg border border-white/10 shadow-lg 
+          transition-all duration-500 ease-in-out
+          ${isMorphing ? 'animate-morph' : 'rounded-full'}
+        `}
+        style={{ 
+          transform: `scale(${orbScale})`,
+          animationDuration: isMorphing ? (isSpeaking ? '5s' : '10s') : 'initial'
+        }}
+      >
+        {/* Thinking indicator: a spinning ring. Only shown when not speaking/listening. */}
+        {isThinking && !isAudiblyActive && (
+          <div className="absolute inset-0 border-[2px] border-purple-400/50 rounded-full animate-spin" style={{ animationDuration: '3s' }}></div>
+        )}
+        
+        {/* Idle state aesthetic rings */}
+        {!isMorphing && !isThinking && (
+          <>
+            <div className="absolute inset-0 border-[3px] border-purple-500/10 rounded-full animate-pulse-slow"></div>
+            <div className="absolute inset-2 border border-blue-300/10 rounded-full"></div>
+          </>
+        )}
       </div>
-      <div className="absolute text-white font-mono text-center">
-        <p className="text-lg font-bold">J.A.R.V.I.S.</p>
-        <p className="text-sm opacity-70">
-          {isListening ? "Listening..." : isSpeaking ? "Speaking..." : isThinking ? "Thinking..." : isProcessing ? "Processing..." : "Online"}
-        </p>
+
+      {/* Text Content */}
+      <div className="absolute flex flex-col items-center justify-center text-white font-sans text-center pointer-events-none">
+        <h1 className="text-4xl font-bold tracking-wider">J.A.R.V.I.S.</h1>
+        <p className="text-lg opacity-80 mt-1">{getStatusText()}</p>
       </div>
     </div>
   );

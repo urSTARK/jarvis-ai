@@ -2,12 +2,10 @@ import React, { useState } from 'react';
 import { useJarvis } from './hooks/useJarvis';
 import Orb from './components/Orb';
 import ChatWindow from './components/ChatWindow';
-import TaskList from './components/TaskList';
 
 const App: React.FC = () => {
   const { 
     messages, 
-    tasks, 
     isSessionActive, 
     isThinking,
     isProcessing,
@@ -17,7 +15,6 @@ const App: React.FC = () => {
     error,
     clearSession,
     restartSession,
-    removeTask,
   } = useJarvis();
 
   const [isChatVisible, setIsChatVisible] = useState(true);
@@ -27,7 +24,6 @@ const App: React.FC = () => {
       <div className="h-screen w-screen bg-slate-900 text-white flex flex-col items-center justify-center font-mono p-4 text-center">
         <h1 className="text-3xl font-bold text-red-500 mb-4">System Malfunction</h1>
         <p className="text-lg mb-2">{error}</p>
-        {/* Fix: Updated environment variable name in the user-facing error message to API_KEY. */}
         <p className="text-slate-400">If you are the administrator, please ensure the <code className="bg-slate-700 p-1 rounded">API_KEY</code> is correctly configured in the Vercel project settings.</p>
         <a href="https://vercel.com/docs/projects/environment-variables" target="_blank" rel="noopener noreferrer" className="mt-6 text-cyan-400 hover:underline">
           Vercel Environment Variables Documentation
@@ -37,28 +33,28 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="h-screen w-screen bg-slate-900/80 flex flex-col font-sans overflow-hidden">
-      <div className="absolute top-4 right-4 z-10 flex space-x-2">
+    <div className="h-screen w-screen flex flex-col font-sans overflow-hidden">
+      <div className="absolute top-4 right-4 z-20 flex items-center space-x-2">
         <button 
           onClick={() => setIsChatVisible(v => !v)}
-          className="bg-slate-700/50 hover:bg-slate-600/50 text-white font-semibold py-2 px-4 border border-slate-600 hover:border-slate-500 rounded-lg shadow-lg transition-all duration-300 backdrop-blur-sm"
+          className="text-slate-300 hover:text-white transition-colors py-2 px-4 rounded-lg hover:bg-white/10"
           aria-label={isChatVisible ? "Hide Chat" : "Show Chat"}
         >
           {isChatVisible ? 'Hide Chat' : 'Show Chat'}
         </button>
         <button 
           onClick={restartSession}
-          className="bg-slate-700/50 hover:bg-cyan-500/50 text-white font-semibold py-2 px-4 border border-slate-600 hover:border-cyan-500 rounded-lg shadow-lg transition-all duration-300 backdrop-blur-sm"
+          className="text-slate-300 hover:text-white transition-colors py-2 px-4 rounded-lg hover:bg-white/10"
           aria-label="Restart Session"
         >
-          Restart Session
+          Restart
         </button>
         <button 
           onClick={clearSession}
-          className="bg-slate-700/50 hover:bg-red-500/50 text-white font-semibold py-2 px-4 border border-slate-600 hover:border-red-500 rounded-lg shadow-lg transition-all duration-300 backdrop-blur-sm"
+          className="text-slate-300 hover:text-white transition-colors py-2 px-4 rounded-lg hover:bg-white/10"
           aria-label="Clear Session"
         >
-          Clear Session
+          Clear
         </button>
       </div>
 
@@ -71,12 +67,15 @@ const App: React.FC = () => {
           micVolume={micVolume}
           outputVolume={outputVolume}
         />
-        <TaskList tasks={tasks} removeTask={removeTask} />
       </div>
 
-      <div className={`flex flex-col bg-slate-800/60 backdrop-blur-md rounded-t-3xl shadow-2xl border-t-2 border-red-500/20 transition-all duration-500 ease-in-out overflow-hidden ${isChatVisible ? 'h-2/3' : 'h-0'}`}>
+      <div 
+        className="flex flex-col bg-black/60 backdrop-blur-md rounded-t-3xl overflow-hidden transition-all duration-500 ease-in-out"
+        style={{ height: isChatVisible ? `40vh` : '0px' }}
+      >
         <ChatWindow messages={messages} />
       </div>
+
     </div>
   );
 };
