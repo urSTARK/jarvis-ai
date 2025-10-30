@@ -306,9 +306,10 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [initializeOutputAudio]);
 
     useEffect(() => {
-        const apiKey = process.env.VITE_GEMINI_KEY;
+        // Fix: Use process.env.API_KEY as per the guidelines to get the API key and resolve TypeScript error.
+        const apiKey = process.env.API_KEY;
         if (!apiKey) {
-            setError('Friday is offline. The VITE_GEMINI_KEY environment variable is not configured.');
+            setError('Friday is offline. The API_KEY environment variable is not configured.');
             return;
         }
         try {
@@ -337,7 +338,6 @@ export const useJarvis = (userName: string | null, isAudioReady: boolean) => {
     }, [messages]);
 
     const addMessage = useCallback((message: Omit<Message, 'id' | 'timestamp'>) => {
-        // Fix: Changed 'new new Date()' to 'new Date()'
         setMessages(prev => [...prev.filter(m => !m.isPartial), { ...message, id: crypto.randomUUID(), timestamp: new Date().toISOString() }]);
     }, []);
 
